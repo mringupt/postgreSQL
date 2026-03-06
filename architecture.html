@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PostgreSQL Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#0a0e1a;--sur:#111827;--sur2:#1a2235;--brd:#1e3a5f;--acc:#3b82f6;--acc2:#06b6d4;--grn:#10b981;--amb:#f59e0b;--red:#ef4444;--pur:#8b5cf6;--txt:#e2e8f0;--mut:#64748b;--mono:"JetBrains Mono",monospace;--sans:"Syne",sans-serif}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--txt);font-family:var(--sans);min-height:100vh}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background-image:linear-gradient(rgba(59,130,246,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(59,130,246,.04) 1px,transparent 1px);background-size:40px 40px}
+.wrap{position:relative;z-index:1;max-width:1100px;margin:0 auto;padding:40px 20px 80px}
+header{text-align:center;margin-bottom:44px}
+.badge{display:inline-block;font-family:var(--mono);font-size:11px;letter-spacing:.15em;color:var(--acc2);border:1px solid var(--acc2);padding:4px 14px;border-radius:2px;margin-bottom:14px;text-transform:uppercase}
+h1{font-size:clamp(24px,5vw,42px);font-weight:800;letter-spacing:-.02em;line-height:1.1;background:linear-gradient(135deg,#e2e8f0 0%,#3b82f6 55%,#06b6d4 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;margin-bottom:10px}
+.sub{color:var(--mut);font-size:13px;font-family:var(--mono)}
+.hint{text-align:center;font-family:var(--mono);font-size:12px;color:var(--mut);margin-bottom:28px;animation:pulse 2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.4}50%{opacity:1}}
+.diagram{display:grid;gap:12px}
+.row{display:grid;gap:12px}
+.r3{grid-template-columns:1fr 1fr 1fr}
+.r4{grid-template-columns:1fr 1fr 1fr 1fr}
+.arr{display:flex;align-items:center;justify-content:center;gap:10px;padding:3px 0;font-family:var(--mono);font-size:11px;color:var(--mut)}
+.node{background:var(--sur);border:1px solid var(--brd);border-radius:8px;padding:15px 17px;cursor:pointer;transition:all .2s;position:relative;overflow:hidden}
+.node::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:var(--c,var(--acc))}
+.node:hover,.node.on{border-color:var(--c,var(--acc));box-shadow:0 0 0 1px var(--c,var(--acc)),0 6px 24px rgba(0,0,0,.4);transform:translateY(-2px);background:var(--sur2)}
+.ni{font-size:20px;margin-bottom:6px;display:block}
+.nt{font-family:var(--mono);font-weight:700;font-size:12px;color:var(--c,var(--acc));margin-bottom:3px}
+.ns{font-family:var(--mono);font-size:11px;color:var(--mut);line-height:1.4}
+.pm{background:linear-gradient(135deg,#0f172a,#1a2235);border:2px solid #3b82f6;border-radius:12px;padding:22px 26px;text-align:center;cursor:pointer;transition:all .25s;box-shadow:0 0 36px rgba(59,130,246,.1)}
+.pm:hover,.pm.on{border-color:#60a5fa;box-shadow:0 0 56px rgba(59,130,246,.25);transform:scale(1.01);background:linear-gradient(135deg,#111827,#1e3a5f)}
+.pm .ni{font-size:28px}.pm .nt{font-size:16px;color:#60a5fa;margin-bottom:5px}.pm .ns{font-size:12px}
+.sbox{border-radius:10px;padding:16px}
+.slabel{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;margin-bottom:11px;display:flex;align-items:center;gap:8px}
+.slabel::after{content:"";flex:1;height:1px}
+.wk{background:rgba(245,158,11,.05);border:1px solid rgba(245,158,11,.2)}
+.wk .slabel{color:#f59e0b}.wk .slabel::after{background:rgba(245,158,11,.2)}
+.mm{background:rgba(139,92,246,.06);border:1px solid rgba(139,92,246,.25)}
+.mm .slabel{color:#8b5cf6}.mm .slabel::after{background:rgba(139,92,246,.2)}
+.ss{background:rgba(16,185,129,.05);border:1px solid rgba(16,185,129,.2)}
+.ss .slabel{color:#10b981}.ss .slabel::after{background:rgba(16,185,129,.2)}
+.mbar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--sur);border:1px solid var(--brd);border-radius:6px;margin-bottom:7px;cursor:pointer;transition:all .2s}
+.mbar:hover,.mbar.on{border-color:var(--mc,#8b5cf6);background:var(--sur2)}
+.mlb{font-family:var(--mono);font-size:11px;font-weight:600;color:var(--mc,#8b5cf6);width:176px;flex-shrink:0}
+.mtr{flex:1;height:7px;background:rgba(255,255,255,.06);border-radius:4px;overflow:hidden}
+.mfi{height:100%;border-radius:4px;background:var(--mc,#8b5cf6);opacity:.65}
+.mhi{font-family:var(--mono);font-size:10px;color:var(--mut);width:80px;text-align:right;flex-shrink:0}
+.oombar{display:flex;align-items:center;gap:10px;padding:8px 12px;background:rgba(239,68,68,.07);border:1px solid rgba(239,68,68,.35);border-radius:6px;margin-bottom:7px;cursor:pointer;transition:all .2s}
+.oombar:hover,.oombar.on{border-color:#ef4444;background:rgba(239,68,68,.12)}
+.dleg{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:8px 14px;background:rgba(16,185,129,.04);border:1px solid rgba(16,185,129,.18);border-radius:8px;font-family:var(--mono);font-size:11px}
+.panel{margin-top:26px;background:var(--sur2);border:1px solid var(--brd);border-radius:12px;padding:24px;min-height:140px;position:relative;overflow:hidden;transition:opacity .2s}
+.panel::before{content:"";position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,var(--pc,#3b82f6),transparent)}
+.panel.empty{opacity:.4}
+.ptitle{font-family:var(--mono);font-size:15px;font-weight:700;color:var(--pc,#3b82f6);margin-bottom:13px;display:flex;align-items:center;gap:9px}
+.pbody{font-size:13.5px;line-height:1.75;color:#94a3b8}
+.pbody strong{color:var(--txt);font-weight:600}
+.pbody code{font-family:var(--mono);font-size:11px;background:rgba(59,130,246,.1);color:#60a5fa;padding:2px 6px;border-radius:3px}
+.pbody ul{margin-top:8px;padding-left:18px}
+.pbody li{margin-bottom:5px}
+.cb{background:rgba(0,0,0,.35);border:1px solid rgba(255,255,255,.06);border-radius:6px;padding:10px 12px;font-family:var(--mono);font-size:11px;color:#94a3b8;margin:10px 0;overflow-x:auto;white-space:pre}
+.tag{display:inline-block;font-family:var(--mono);font-size:10px;padding:3px 9px;border-radius:3px;margin:4px 4px 0 0;border:1px solid}
+.tw{color:#f59e0b;border-color:rgba(245,158,11,.4);background:rgba(245,158,11,.08)}
+.ti{color:#06b6d4;border-color:rgba(6,182,212,.4);background:rgba(6,182,212,.08)}
+.to{color:#10b981;border-color:rgba(16,185,129,.4);background:rgba(16,185,129,.08)}
+.td{color:#ef4444;border-color:rgba(239,68,68,.4);background:rgba(239,68,68,.08)}
+@media(max-width:680px){.r3,.r4{grid-template-columns:1fr 1fr}.mlb{width:120px}}
+@media(max-width:440px){.r3,.r4{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div id="c-client" style="display:none" data-color="#06b6d4" data-icon="💻" data-title="Client Application"><strong>What it is:</strong> Any program connecting to PostgreSQL — your Node.js/Python/Java app, a GUI like DBeaver or TablePlus, or the <code>psql</code> command-line tool.<br><br>
+<strong>How it connects:</strong> Over TCP to port 5432 using the PostgreSQL wire protocol. ORMs like Prisma, SQLAlchemy, and ActiveRecord generate SQL and send it as plain text over this protocol.<br><br>
+<strong>What the client actually does:</strong> Almost nothing server-side. It sends an SQL string and waits. All parsing, planning, and execution happens inside Postgres. The client just receives rows back.<br><br>
+<strong>The hidden cost of each connection:</strong> Every connection causes postmaster to fork a new OS process consuming ~5–10MB of RAM just for process overhead, before any query runs. 500 open connections = 5GB RAM overhead before a single query runs.
+<div style="margin-top:12px">
+<span class="tag ti">Protocol: libpq / PostgreSQL wire protocol</span>
+<span class="tag tw">Each connection = one forked OS process (~5–10MB RAM)</span>
+<span class="tag td">500+ raw connections without pooling = serious memory pressure</span>
+</div></div>
+<div id="c-postmaster" style="display:none" data-color="#3b82f6" data-icon="🐘" data-title="postmaster — The Master Daemon"><strong>What it is:</strong> The very first process that starts when you run PostgreSQL. It is the parent of everything else — all backend processes and background workers are its children.<br><br>
+<strong>What it does:</strong>
+<ul>
+<li>Listens on port 5432 for incoming TCP connections</li>
+<li><strong>Forks a new backend process</strong> for each connection via Unix fork() — creating a full OS-level copy of itself</li>
+<li>Allocates <strong>shared memory</strong> at startup (shared_buffers, WAL buffers, lock tables) — all child processes inherit access to this shared region</li>
+<li>Spawns and monitors all background workers; if one crashes, postmaster restarts it</li>
+<li>Handles OS signals: SIGHUP = reload config, SIGTERM = graceful shutdown, SIGQUIT = immediate stop</li>
+</ul><br>
+<strong>If postmaster dies:</strong> Every connection drops instantly. All in-flight transactions are lost. Postgres is completely down. On restart it must do crash recovery via WAL replay.
+<div style="margin-top:12px">
+<span class="tag td">☠ If postmaster dies, the entire cluster goes down instantly</span>
+<span class="tag ti">PID stored in $PGDATA/postmaster.pid</span>
+</div></div>
+<div id="c-backend" style="display:none" data-color="#3b82f6" data-icon="⚙️" data-title="Backend Process — One Per Connection"><strong>What it is:</strong> A dedicated OS process forked by postmaster for each client connection. Lives exactly as long as the connection is open, then exits.<br><br>
+<strong>The query pipeline inside every backend:</strong>
+<ul>
+<li><strong>Parser</strong> — turns SQL text into a parse tree. Catches syntax errors.</li>
+<li><strong>Analyzer</strong> — resolves table/column names against the system catalog. Catches "relation does not exist" errors.</li>
+<li><strong>Rewriter</strong> — applies rules, expands views into their underlying SQL</li>
+<li><strong>Planner / Optimizer</strong> — generates all candidate execution plans, estimates cost using table statistics, picks the cheapest. This is where index vs seq scan decisions happen.</li>
+<li><strong>Executor</strong> — walks the plan tree, fetches 8KB pages from shared_buffers (or disk), applies filters, joins, aggregates, returns results</li>
+</ul><br>
+<strong>Why separate processes and not threads?</strong> Crash isolation. If one query crashes its backend, only that connection dies. Others are completely unaffected. Trade-off: ~5–10MB RAM overhead per connection.
+<div style="margin-top:12px">
+<span class="tag to">✓ Crash in one backend cannot affect others</span>
+<span class="tag tw">200+ connections without a pooler = RAM pressure</span>
+</div></div>
+<div id="c-bgwriter" style="display:none" data-color="#f59e0b" data-icon="✍️" data-title="bgwriter — The Dirty Page Flusher"><strong>What it does:</strong> Continuously scans shared_buffers looking for dirty pages and writes them to heap files on disk — proactively, before a checkpoint forces it.<br><br>
+<strong>What exactly is a "dirty" page?</strong> When a backend modifies data in RAM (INSERT/UPDATE/DELETE), the 8KB page in shared_buffers becomes <em>different</em> from its copy on disk. That page is now "dirty" — like editing a Google Doc offline: your browser has the new version, the server does not. Until written back to disk, a crash could lose that change (WAL protects against this, but the heap page itself is still unsaved).<br><br>
+<div class="cb">shared_buffers (RAM):
+  [page A: DIRTY 🔴]  modified, disk is stale
+  [page B: clean  ✅]  identical to disk, safe
+  [page C: DIRTY 🔴]  modified, disk is stale
+          |
+          | bgwriter writes dirty pages to disk
+          v
+disk (heap files):
+  [page A: saved ✅]   now matches RAM
+  [page C: saved ✅]   now matches RAM</div>
+<strong>Why bgwriter matters:</strong> Without it, ALL dirty flushing would happen at checkpoint time — causing a massive I/O spike every few minutes. bgwriter spreads writes smoothly over time, like doing homework daily instead of cramming the night before.<br><br>
+<strong>If bgwriter falls behind:</strong> Backend processes themselves flush pages when they need free buffer slots. You see <code>buffers_backend_fsync</code> rising in <code>pg_stat_bgwriter</code> — a warning sign.
+<div style="margin-top:12px">
+<span class="tag ti">Monitor: pg_stat_bgwriter.buffers_clean</span>
+<span class="tag tw">High buffers_backend_fsync = bgwriter not keeping up</span>
+</div></div>
+<div id="c-checkpointer" style="display:none" data-color="#f59e0b" data-icon="📍" data-title="checkpointer — Crash Recovery Point Maker"><strong>What it does:</strong> Periodically forces ALL dirty pages in shared_buffers to be written to disk, then writes a "checkpoint record" into the WAL — creating a known-good point that crash recovery can start from.<br><br>
+<div class="cb">Timeline:
+  [checkpoint] ---WAL records--- [WAL records] ---[CRASH]
+       |
+       +-- On restart, replay WAL from HERE forward
+       +-- Not from the very beginning of time
+       +-- Recovery time = distance from last checkpoint to crash</div>
+<strong>Key settings:</strong>
+<ul>
+<li><code>checkpoint_timeout</code> — max time between checkpoints (default 5 min)</li>
+<li><code>max_wal_size</code> — also triggers a checkpoint if WAL grows this large (default 1GB)</li>
+<li><code>checkpoint_completion_target = 0.9</code> — spread checkpoint I/O over 90% of the interval to avoid I/O spikes at the end</li>
+</ul>
+<div style="margin-top:12px">
+<span class="tag tw">Frequent checkpoints = constant I/O pressure</span>
+<span class="tag td">Infrequent checkpoints = slow crash recovery (minutes)</span>
+<span class="tag ti">checkpoint_completion_target=0.9 smooths the I/O burst</span>
+</div></div>
+<div id="c-autovacuum" style="display:none" data-color="#10b981" data-icon="🧹" data-title="autovacuum — The Garbage Collector"><strong>What it does:</strong> Periodically scans tables for dead tuples — stale row versions left behind by UPDATE and DELETE — and reclaims that wasted space.<br><br>
+<strong>Why dead tuples exist (MVCC):</strong> PostgreSQL uses Multi-Version Concurrency Control. When you UPDATE a row, Postgres does NOT overwrite it in-place. It writes a brand new version and stamps the old one as "dead" (sets xmax). This lets concurrent transactions still see the old version. VACUUM physically removes these dead versions later.<br><br>
+<div class="cb">UPDATE users SET name='Charlie' WHERE id=1;
+
+Heap page after update:
+  [id=1, name=Alice,   xmax=99] ← DEAD 🔴 (old version, marked for removal)
+  [id=1, name=Charlie, xmin=99] ← LIVE ✅ (new version)
+
+autovacuum later removes the dead row:
+  [id=1, name=Charlie, xmin=99] ← only live version remains
+  [free space................  ] ← space reclaimed for new rows</div>
+<strong>Also does:</strong>
+<ul>
+<li>Runs ANALYZE to refresh query planner statistics</li>
+<li>Freezes old transaction IDs to prevent XID wraparound — a catastrophic scenario where data becomes invisible (covered in Topic 5)</li>
+</ul>
+<div style="margin-top:12px">
+<span class="tag td">☠ NEVER disable autovacuum in production</span>
+<span class="tag ti">Monitor: pg_stat_user_tables.n_dead_tup</span>
+<span class="tag tw">n_dead_tup growing unchecked = table bloat, slow scans</span>
+</div></div>
+<div id="c-walwriter" style="display:none" data-color="#8b5cf6" data-icon="📝" data-title="walwriter — WAL Buffer Flusher"><strong>What it does:</strong> Periodically flushes the in-memory WAL buffer to the WAL files on disk. Runs every <code>wal_writer_delay</code> (default 200ms).<br><br>
+<strong>How WAL works:</strong> Before ANY data page is modified, Postgres first writes a record describing the change to WAL. On a crash, even if dirty data pages were never flushed to heap files, Postgres replays WAL to reconstruct all committed changes. WAL is the foundation of durability and replication.<br><br>
+<div class="cb">Transaction modifies a row:
+  1. Write WAL record → WAL buffer (RAM)    ← instant
+  2. Modify data page → shared_buffers (RAM) ← instant
+  3. COMMIT: flush WAL buffer → disk         ← sequential write (fast)
+             client gets confirmation here
+  4. bgwriter writes dirty data page later   ← async, can happen later
+
+Key: WAL is append-only (sequential). Sequential disk writes
+are 10–100x faster than random writes. This is why Postgres
+is both durable AND fast.</div>
+<strong>Durability settings:</strong>
+<ul>
+<li><code>synchronous_commit = on</code> — wait for WAL flush before confirming commit. Safest. Default.</li>
+<li><code>synchronous_commit = off</code> — confirm immediately; WAL flushed async. Up to 200ms of commits can be lost on crash. Use only for non-critical data.</li>
+<li><code>fsync = off</code> — NEVER in production. Risks total data directory corruption on any crash.</li>
+</ul>
+<div style="margin-top:12px">
+<span class="tag to">WAL = foundation of crash safety AND replication</span>
+<span class="tag td">fsync=off = risk of complete data corruption on crash</span>
+</div></div>
+<div id="c-shared_buffers" style="display:none" data-color="#8b5cf6" data-icon="🧠" data-title="shared_buffers — PostgreSQL's In-Memory Page Cache"><strong>What it is:</strong> A fixed region of RAM allocated when Postgres starts. Holds 8KB data pages and is shared by ALL backend processes simultaneously. It is Postgres's own cache layer, separate from the OS page cache.<br><br>
+<strong>The two-layer cache system:</strong>
+<div class="cb">Backend needs to read a row:
+  Step 1: Check shared_buffers
+          → Found? Buffer HIT ✅  (no disk I/O, instant)
+          → Not found? Go to Step 2
+
+  Step 2: Check OS page cache (kernel memory)
+          → Found? Still no physical disk I/O! Load into shared_buffers.
+          → Not found? Go to Step 3
+
+  Step 3: Read from physical disk 🔴 → load into shared_buffers
+          This is the slow path. Avoid by having enough RAM.</div>
+<strong>Clean vs Dirty pages:</strong>
+<ul>
+<li><strong>Clean page</strong> — identical to disk copy. Can be evicted from RAM anytime with no penalty.</li>
+<li><strong>Dirty page</strong> — modified in RAM, disk copy is stale. Must be flushed by bgwriter or checkpointer before it can be evicted.</li>
+</ul>
+<strong>Why 25% of RAM, not 100%?</strong> The OS independently caches disk reads. Giving Postgres all RAM leaves no room for the OS cache (Step 2 disappears). 25% Postgres + 75% OS = two independent cache layers.<br><br>
+<strong>What is OLTP?</strong> Online Transaction Processing — your live app traffic: user logins, order inserts, balance checks. Many small fast queries running concurrently. The same "hot" pages are read thousands of times per second. Cache hit rate matters enormously. Target 99%+.<br><br>
+<code>SELECT sum(heap_blks_hit) / nullif(sum(heap_blks_hit)+sum(heap_blks_read),0) AS hit_rate FROM pg_statio_user_tables;</code>
+<div style="margin-top:12px">
+<span class="tag to">Set to 25% of total RAM</span>
+<span class="tag tw">Hit rate below 95% for OLTP = consider increasing shared_buffers</span>
+<span class="tag ti">Two cache layers: shared_buffers (Postgres) + OS page cache (kernel)</span>
+</div></div>
+<div id="c-work_mem" style="display:none" data-color="#6366f1" data-icon="🔢" data-title="work_mem — Per-Operation Sort/Hash Memory"><strong>What it is:</strong> The maximum RAM for a single sort or hash join operation node. Critical: <strong>per operation node</strong> — not per query, not per connection. Per individual node in the query plan tree.<br><br>
+<strong>The multiplication trap — why this gets dangerous fast:</strong>
+<div class="cb">Your query plan has 4 nodes:
+  Hash Join        ← gets its own work_mem (64MB)
+    Sort           ← gets its own work_mem (64MB)
+    Hash Aggregate ← gets its own work_mem (64MB)
+      Sort         ← gets its own work_mem (64MB)
+
+1 query  = 4 nodes × 64MB            =   256MB
+4 workers × 256MB                    = 1,024MB  (1GB for ONE query!)
+100 connections × 1GB                = 100GB 🔥
+
+→ Server runs out of RAM
+→ Linux OOM Killer activates
+→ Kills Postgres (biggest process) instantly
+→ Database crashes. All connections drop. No warning.</div>
+<strong>What is OOM?</strong> Out Of Memory. When RAM is exhausted, the Linux OOM Killer instantly kills the biggest process (usually Postgres) with no warning, no log, no graceful shutdown.<br><br>
+<strong>Too small?</strong> Sorts spill to disk temp files:
+<code>Sort Method: external merge  Disk: 48MB</code> — 10–100x slower.<br><br>
+<strong>What is OLTP?</strong> Online Transaction Processing — live app traffic with many short concurrent queries. Set work_mem small globally; increase per-session for heavy one-off queries.
+<div class="cb">-- postgresql.conf (safe global for OLTP)
+work_mem = 8MB
+
+-- Per-session for a heavy analytics query
+SET work_mem = '512MB';
+SELECT ... GROUP BY ... ORDER BY ...;
+RESET work_mem;  -- back to 8MB
+
+-- Safe sizing formula:
+-- (RAM × 0.25) / (max_connections × avg_plan_nodes)
+-- 32GB RAM, 200 connections, 3 nodes avg:
+-- 8192 / 600 = ~13MB → round down to 8MB</div>
+<div style="margin-top:12px">
+<span class="tag td">Too high = OOM kill = instant database crash, no warning</span>
+<span class="tag tw">Too low = disk spill = 10–100x slower sorts</span>
+<span class="tag to">Set small globally; bump per-session for analytics</span>
+</div></div>
+<div id="c-oom" style="display:none" data-color="#ef4444" data-icon="💥" data-title="OOM — Out Of Memory Kill"><strong>OOM = Out Of Memory.</strong> When the server's RAM is completely exhausted, the Linux kernel activates its last-resort mechanism: the OOM Killer.<br><br>
+<div class="cb">1. A process requests more RAM from the OS
+2. OS has none available — all memory is allocated
+3. OOM Killer activates: scans all running processes
+4. Assigns each a score (roughly: RAM used × time)
+5. Sends SIGKILL to the highest-scoring process
+6. SIGKILL = instant death. No cleanup. No log. No warning.
+7. Postgres (often the biggest process) gets killed.
+8. All connections drop simultaneously.</div>
+<strong>What happens to Postgres:</strong>
+<ul>
+<li>postmaster dies instantly — no graceful shutdown</li>
+<li>All active client connections drop simultaneously</li>
+<li>All in-flight transactions are lost (WAL ensures clean rollback on recovery)</li>
+<li>On restart: crash recovery via WAL replay — seconds to minutes depending on checkpoint gap</li>
+</ul>
+<strong>How to confirm OOM killed Postgres:</strong>
+<div class="cb">$ dmesg | grep -i "oom"
+Out of memory: Kill process 1234 (postgres) score 847 ...
+Killed process 1234 (postgres), total-vm:8388608kB ...
+
+# Postgres logs just show abrupt stop — process was killed
+# before it could write an error message.</div>
+<strong>Main causes in Postgres:</strong>
+<ul>
+<li><strong>work_mem too high globally</strong> — most common. Multiplies across all connections and plan nodes.</li>
+<li><strong>Too many connections</strong> — 500 × 10MB overhead = 5GB before any queries run</li>
+<li><strong>Runaway parallel query</strong> — many workers each using large work_mem</li>
+<li><strong>maintenance_work_mem too high</strong> — used during VACUUM and CREATE INDEX</li>
+</ul>
+<div style="margin-top:12px">
+<span class="tag td">☠ No warning, no log, no graceful shutdown — instant death</span>
+<span class="tag tw">Prevention: conservative work_mem + PgBouncer connection pooling</span>
+<span class="tag ti">Monitor RAM: alert at 85% usage before it becomes critical</span>
+</div></div>
+<div id="c-wal_buffers" style="display:none" data-color="#06b6d4" data-icon="📋" data-title="WAL Buffers — In-Memory WAL Staging Area"><strong>What it is:</strong> A small region of shared memory where WAL records are staged in RAM before being flushed to WAL files on disk by the walwriter process.<br><br>
+<div class="cb">Transaction modifies data:
+  1. WAL record → WAL buffer (RAM)      ← instant
+  2. Data page  → shared_buffers (RAM)  ← instant
+  3. COMMIT: WAL buffer flushed to disk ← sequential write (fast)
+             client gets confirmation
+  4. bgwriter writes data page later    ← async
+
+Why WAL writes are fast despite touching disk:
+  WAL is append-only — always sequential I/O.
+  Sequential disk writes are 10–100x faster than random writes.
+  This is why Postgres is both durable AND performant.</div>
+<strong>Size:</strong> Auto-set to 1/32 of shared_buffers, capped at 16MB. Rarely needs manual tuning.<br><br>
+<strong>When to increase:</strong> If backends are waiting on WAL buffer locks (visible in <code>pg_stat_activity</code>), set explicitly to 16MB or 32MB in postgresql.conf.
+<div style="margin-top:12px">
+<span class="tag to">Default auto-tuning is fine for most workloads</span>
+<span class="tag ti">Sequential appends = much faster than random data page writes</span>
+</div></div>
+<div id="c-eff_cache" style="display:none" data-color="#94a3b8" data-icon="💭" data-title="effective_cache_size — Planner Hint (Allocates Zero RAM)"><strong>What it is:</strong> A number you tell the query planner to <em>assume</em> is available for caching — combining shared_buffers AND the OS page cache. <strong>It allocates absolutely zero RAM. It is purely a hint to the planner.</strong><br><br>
+<strong>How the planner uses it:</strong> When choosing between an index scan and a sequential scan, the planner estimates how many pages will be in memory vs on disk. A larger effective_cache_size makes index scans look more attractive.<br><br>
+<div class="cb">Scenario: 64GB RAM server, large 10GB table
+
+WRONG: effective_cache_size = 128MB (Postgres default)
+  Planner thinks: "almost nothing is cached"
+  Planner picks:  Sequential Scan (assumes disk I/O for everything)
+  Reality:        Data IS cached — index scan would be instant
+  Result:         Unnecessarily slow full-table scan
+
+CORRECT: effective_cache_size = 48GB (75% of 64GB)
+  Planner thinks: "most data is probably in memory"
+  Planner picks:  Index Scan
+  Result:         Fast query, correct decision</div>
+<strong>Recommended value:</strong> ~75% of total RAM. On a 64GB server: <code>effective_cache_size = 48GB</code><br><br>
+<strong>Most common mistake:</strong> Leaving it at the default 128MB on a server with 32GB+ RAM. The planner runs with completely wrong assumptions and picks sequential scans everywhere.
+<div style="margin-top:12px">
+<span class="tag tw">Default of 128MB is almost always dangerously low — change this</span>
+<span class="tag to">Set to ~75% of total RAM</span>
+<span class="tag ti">Zero RAM allocated — purely a hint to the query planner</span>
+</div></div>
+<div id="c-heap" style="display:none" data-color="#10b981" data-icon="📦" data-title="Heap Files — Unordered Table Storage on Disk"><strong>Why "heap"?</strong> In computer science, a heap is storage with no particular order — things land wherever there is space, with no sorting. PostgreSQL heap files are exactly that: <strong>rows are stored in no sorted order</strong>. A new row goes into the first available free slot. No attempt to keep rows ordered by ID or anything else.<br><br>
+<div class="cb">Heap file — completely unordered on disk:
+  Page 1: [id=5, Alice] [id=1, Bob]   [id=9, Carol] [id=3, Dan]
+  Page 2: [id=7, Eve]   [DEAD 🔴]     [id=8, Frank] [free space]
+  Page 3: [id=4, Grace] [id=6, Henry] [free space....................]
+
+INSERT id=10 → goes into first free slot (Page 2, after dead tuple)
+No attempt to place id=10 near id=9. Heap does not care about order.</div>
+<strong>Structure of each 8KB page:</strong>
+<ul>
+<li><strong>Page header</strong> (24 bytes) — LSN, checksum, free space pointers</li>
+<li><strong>Item pointers</strong> — array of (offset, length) pairs, one per tuple</li>
+<li><strong>Free space</strong> — in the middle, shrinks as rows are added</li>
+<li><strong>Tuples (rows)</strong> — packed upward from the bottom of the page</li>
+</ul>
+<strong>The dirty page connection:</strong> When a backend modifies a row, that 8KB heap page in shared_buffers changes while the disk copy stays the same — the page is now "dirty." bgwriter and checkpointer eventually flush it back to the heap file on disk.
+<div class="cb">Disk heap page:  [Alice, Bob]      ← CLEAN ✅ (matches RAM)
+RAM shared_buf:  [Alice, Charlie]   ← DIRTY 🔴 (Bob→Charlie, not saved yet)
+                         |
+                         | bgwriter flushes to disk
+                         v
+Disk heap page:  [Alice, Charlie]   ← CLEAN ✅ again</div>
+<strong>Why UPDATE never overwrites in-place:</strong> MVCC requires old row versions to remain visible to concurrent transactions. UPDATE writes a NEW tuple and stamps the old one dead (xmax). autovacuum later removes dead tuples.
+<div style="margin-top:12px">
+<span class="tag ti">8KB page = the fundamental unit of all I/O in Postgres</span>
+<span class="tag tw">Dead tuples = bloat. autovacuum reclaims them.</span>
+<span class="tag to">Unordered = fast inserts, but full scans need indexes</span>
+</div></div>
+<div id="c-wal" style="display:none" data-color="#06b6d4" data-icon="📜" data-title="WAL Files — Write-Ahead Log on Disk"><strong>What it is:</strong> An append-only sequential log of every change made to the database, written to disk BEFORE the actual data pages are modified. The "write-ahead" guarantee: WAL record always comes first.<br><br>
+<strong>Three things WAL enables:</strong>
+<ul>
+<li><strong>Crash recovery:</strong> On restart, Postgres reads the last checkpoint record then replays WAL forward. Even if dirty data pages were never flushed to heap files, all committed changes are recovered. No committed data is ever lost.</li>
+<li><strong>Streaming replication:</strong> Standbys receive the same WAL stream and apply it in order — staying byte-for-byte identical to the primary. Physical replication is just WAL shipping.</li>
+<li><strong>Point-in-time recovery (PITR):</strong> Archive WAL files continuously. With a base backup + WAL archive, you can restore to any exact moment in the past.</li>
+</ul>
+<div class="cb">$PGDATA/pg_wal/ on disk:
+  000000010000000000000001  (16MB segment, complete)
+  000000010000000000000002  (16MB segment, complete)
+  000000010000000000000003  (current, being appended)
+
+Each record: LSN | Transaction ID | Operation | Changed data
+Always sequential appends — never random writes → very fast</div>
+<strong>Critical rule:</strong> <code>fsync = on</code> must never be disabled. Without it, WAL sits in OS buffer cache and can be lost on power failure — leaving the database in a corrupt state with no recovery path.
+<div style="margin-top:12px">
+<span class="tag to">Sequential append-only I/O = very fast</span>
+<span class="tag td">fsync=off = silent data corruption risk on any crash or power loss</span>
+<span class="tag ti">wal_level=replica required for streaming replication</span>
+</div></div>
+<div id="c-indexes" style="display:none" data-color="#f59e0b" data-icon="🗂️" data-title="Index Files — Sorted Pointers Into the Heap"><strong>What it is:</strong> Separate files on disk storing a data structure that maps key values to physical row locations (ctid = page number + offset within page) in the heap file. An index stores pointers to rows, not the row data itself.<br><br>
+<div class="cb">B-Tree index on users(email):
+  "alice@x.com" → ctid=(page 4, offset 2)   [sorted]
+  "bob@x.com"   → ctid=(page 1, offset 5)   [sorted]
+  "carol@x.com" → ctid=(page 9, offset 1)   [sorted]
+
+Query: SELECT * FROM users WHERE email = 'bob@x.com'
+
+With index:
+  1. B-Tree traversal → ctid = (page 1, offset 5)  [fast, log(n)]
+  2. Heap fetch: read page 1, get tuple at offset 5  [1 page read]
+  Total: 2 steps
+
+Without index:
+  Read ALL pages of the heap file looking for bob@x.com
+  Could be thousands of pages on a large table</div>
+<strong>Index types in PostgreSQL:</strong>
+<ul>
+<li><strong>B-Tree</strong> (default) — balanced sorted tree. Handles =, &lt;, &gt;, BETWEEN, ORDER BY, LIKE 'prefix%'. Use for almost everything.</li>
+<li><strong>GIN</strong> — for JSONB, arrays, full-text search. Stores per-element entries.</li>
+<li><strong>GiST</strong> — geometric types, range types. Extensible, supports overlap/contain operators.</li>
+<li><strong>BRIN</strong> — tiny index storing min/max per block range. Only useful for naturally ordered append-only data (time-series).</li>
+<li><strong>Hash</strong> — equality-only O(1) lookup. Rarely preferred over B-Tree in practice.</li>
+</ul>
+<strong>Why Postgres sometimes ignores your index:</strong> An index scan involves random I/O (jump to heap page at ctid). If the query returns 20% of the table, that is thousands of random I/Os — often worse than one sequential scan through the whole heap. The planner calculates this and picks correctly.
+<div style="margin-top:12px">
+<span class="tag to">Index-Only Scan = no heap fetch needed (fastest possible path)</span>
+<span class="tag ti">Index → ctid → heap page (two-step lookup)</span>
+<span class="tag tw">Planner may correctly choose Seq Scan if selectivity is too low</span>
+</div></div>
+
+<header>
+  <div class="badge">internals &middot; visual guide</div>
+  <h1>PostgreSQL Architecture</h1>
+  <p class="sub">Click any component to learn what it does</p>
+</header>
+<p class="hint">&#9660; Click any block &mdash; full explanation appears below &#9660;</p>
+
+<div class="diagram">
+
+  <div style="text-align:center">
+    <div class="node" style="--c:#06b6d4;display:inline-block;min-width:210px;text-align:left" onclick="go('client')" id="n-client">
+      <span class="ni">&#128187;</span>
+      <div class="nt">Client Application</div>
+      <div class="ns">Your app / psql / ORM<br>Sends SQL &rarr; receives rows</div>
+    </div>
+  </div>
+
+  <div class="arr">
+    <span style="color:#3b82f6">&#8595;</span>
+    TCP &middot; port 5432 &middot; PostgreSQL wire protocol
+    <span style="color:#3b82f6">&#8595;</span>
+  </div>
+
+  <div class="pm" onclick="go('postmaster')" id="n-postmaster">
+    <span class="ni">&#128024;</span>
+    <div class="nt">postmaster</div>
+    <div class="ns">Master daemon &middot; listens on port 5432 &middot; forks backend processes &middot; allocates shared memory &middot; monitors all workers</div>
+  </div>
+
+  <div class="arr">
+    <span>&#8595;</span> forks OS processes (Unix fork) <span>&#8595;</span>
+  </div>
+
+  <div class="row r3">
+    <div class="node" style="--c:#3b82f6" onclick="go('backend')" id="n-b1">
+      <span class="ni">&#9881;&#65039;</span>
+      <div class="nt">backend process</div>
+      <div class="ns">parse &rarr; plan &rarr; execute<br>One per connection</div>
+    </div>
+    <div class="node" style="--c:#3b82f6;opacity:.65" onclick="go('backend')" id="n-b2">
+      <span class="ni">&#9881;&#65039;</span>
+      <div class="nt">backend process</div>
+      <div class="ns">parse &rarr; plan &rarr; execute<br>One per connection</div>
+    </div>
+    <div class="node" style="--c:#3b82f6;opacity:.35" onclick="go('backend')" id="n-b3">
+      <span class="ni">&#9881;&#65039;</span>
+      <div class="nt">backend process</div>
+      <div class="ns">parse &rarr; plan &rarr; execute<br>One per connection</div>
+    </div>
+  </div>
+
+  <div class="sbox wk">
+    <div class="slabel">Background Workers &mdash; always running</div>
+    <div class="row r4">
+      <div class="node" style="--c:#f59e0b" onclick="go('bgwriter')" id="n-bgwriter">
+        <span class="ni">&#9997;&#65039;</span>
+        <div class="nt">bgwriter</div>
+        <div class="ns">Flushes dirty pages to disk continuously</div>
+      </div>
+      <div class="node" style="--c:#f59e0b" onclick="go('checkpointer')" id="n-checkpointer">
+        <span class="ni">&#128205;</span>
+        <div class="nt">checkpointer</div>
+        <div class="ns">Periodic sync &middot; crash recovery point</div>
+      </div>
+      <div class="node" style="--c:#10b981" onclick="go('autovacuum')" id="n-autovacuum">
+        <span class="ni">&#129529;</span>
+        <div class="nt">autovacuum</div>
+        <div class="ns">Removes dead tuples &middot; updates planner stats</div>
+      </div>
+      <div class="node" style="--c:#8b5cf6" onclick="go('walwriter')" id="n-walwriter">
+        <span class="ni">&#128221;</span>
+        <div class="nt">walwriter</div>
+        <div class="ns">Flushes WAL buffer to WAL files on disk</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="sbox mm">
+    <div class="slabel">Shared Memory &mdash; RAM allocated at startup, shared by all backends</div>
+    <div class="mbar" style="--mc:#8b5cf6" onclick="go('shared_buffers')" id="n-sb">
+      <span class="mlb" style="color:#8b5cf6">shared_buffers</span>
+      <div class="mtr"><div class="mfi" style="--mc:#8b5cf6;width:25%"></div></div>
+      <span class="mhi">~25% of RAM</span>
+    </div>
+    <div class="mbar" style="--mc:#6366f1" onclick="go('work_mem')" id="n-wm">
+      <span class="mlb" style="color:#6366f1">work_mem</span>
+      <div class="mtr"><div class="mfi" style="--mc:#6366f1;width:8%"></div></div>
+      <span class="mhi">per operation</span>
+    </div>
+    <div class="oombar" onclick="go('oom')" id="n-oom">
+      <span style="font-size:16px">&#128165;</span>
+      <span style="font-family:var(--mono);font-size:11px;font-weight:700;color:#ef4444">OOM RISK</span>
+      <span style="font-family:var(--mono);font-size:11px;color:var(--mut);flex:1">work_mem &times; plan nodes &times; connections &times; parallel workers = RAM explosion &rarr; crash</span>
+      <span style="font-family:var(--mono);font-size:10px;color:#ef4444">click &#8599;</span>
+    </div>
+    <div class="mbar" style="--mc:#06b6d4" onclick="go('wal_buffers')" id="n-wb">
+      <span class="mlb" style="color:#06b6d4">WAL buffers</span>
+      <div class="mtr"><div class="mfi" style="--mc:#06b6d4;width:5%"></div></div>
+      <span class="mhi">~16MB max</span>
+    </div>
+    <div class="mbar" style="--mc:#94a3b8" onclick="go('eff_cache')" id="n-ec">
+      <span class="mlb" style="color:#94a3b8">effective_cache_size</span>
+      <div class="mtr"><div class="mfi" style="--mc:#94a3b8;width:75%"></div></div>
+      <span class="mhi">planner hint &#9888;</span>
+    </div>
+  </div>
+
+  <div class="dleg">
+    <span style="color:var(--mut)">Page states in shared_buffers:</span>
+    <span style="color:#10b981">&#9989; Clean &mdash; identical to disk copy, safe to discard from RAM</span>
+    <span style="color:#ef4444">&#128308; Dirty &mdash; modified in RAM, NOT yet written to disk</span>
+    <span style="color:var(--mut)">bgwriter &amp; checkpointer flush dirty &rarr; disk</span>
+  </div>
+
+  <div class="sbox ss">
+    <div class="slabel">Disk Storage &mdash; persisted on filesystem</div>
+    <div class="row r3">
+      <div class="node" style="--c:#10b981" onclick="go('heap')" id="n-heap">
+        <span class="ni">&#128230;</span>
+        <div class="nt">Heap Files</div>
+        <div class="ns">Table rows in 8KB pages<br>Unordered &mdash; "heap" = no sort</div>
+      </div>
+      <div class="node" style="--c:#06b6d4" onclick="go('wal')" id="n-wal">
+        <span class="ni">&#128220;</span>
+        <div class="nt">WAL Files</div>
+        <div class="ns">Write-Ahead Log<br>Sequential &middot; crash-safe</div>
+      </div>
+      <div class="node" style="--c:#f59e0b" onclick="go('indexes')" id="n-idx">
+        <span class="ni">&#128452;&#65039;</span>
+        <div class="nt">Index Files</div>
+        <div class="ns">B-Tree, GIN, GiST, BRIN<br>Sorted pointers into heap</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="panel empty" id="panel" style="--pc:#3b82f6">
+  <div class="ptitle" id="ptitle">&#8592; Click any component above</div>
+  <div class="pbody" id="pbody" style="color:#475569">
+    Every block is clickable. Select one to see a detailed explanation of what it does, why it exists, what breaks when it fails, and what interviewers ask about it.
+  </div>
+</div>
+
+</div>
+
+<script>
+var idmap = {
+  client:"n-client", postmaster:"n-postmaster", backend:"n-b1",
+  bgwriter:"n-bgwriter", checkpointer:"n-checkpointer",
+  autovacuum:"n-autovacuum", walwriter:"n-walwriter",
+  shared_buffers:"n-sb", work_mem:"n-wm", oom:"n-oom",
+  wal_buffers:"n-wb", eff_cache:"n-ec",
+  heap:"n-heap", wal:"n-wal", indexes:"n-idx"
+};
+
+function go(key) {
+  var src = document.getElementById("c-" + key);
+  if (!src) return;
+  var color = src.getAttribute("data-color");
+  var icon  = src.getAttribute("data-icon");
+  var title = src.getAttribute("data-title");
+  var html  = src.innerHTML;
+
+  var panel = document.getElementById("panel");
+  var ptitle = document.getElementById("ptitle");
+  var pbody  = document.getElementById("pbody");
+
+  panel.style.setProperty("--pc", color);
+  ptitle.innerHTML = icon + " &nbsp;" + title;
+  pbody.innerHTML  = html;
+  pbody.style.color = "#94a3b8";
+  panel.classList.remove("empty");
+
+  var all = document.querySelectorAll(".node, .pm, .mbar, .oombar");
+  for (var i = 0; i < all.length; i++) all[i].classList.remove("on");
+
+  var el = document.getElementById(idmap[key]);
+  if (el) el.classList.add("on");
+
+  if (key === "backend") {
+    var b2 = document.getElementById("n-b2");
+    var b3 = document.getElementById("n-b3");
+    if (b2) b2.classList.add("on");
+    if (b3) b3.classList.add("on");
+  }
+  panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+}
+</script>
+</body>
+</html>
