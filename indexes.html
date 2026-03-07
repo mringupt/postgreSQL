@@ -1,0 +1,1579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PostgreSQL Index Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,700;0,9..144,900;1,9..144,300&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #06080f;
+  --surface: #0d1117;
+  --surface2: #161b27;
+  --surface3: #1c2333;
+  --border: #21293d;
+  --border2: #2d3748;
+  --text: #e6edf3;
+  --muted: #5a6a85;
+  --mono: 'IBM Plex Mono', monospace;
+  --serif: 'Fraunces', serif;
+
+  --btree: #2563eb;
+  --btree-glow: rgba(37,99,235,0.25);
+  --gin: #059669;
+  --gin-glow: rgba(5,150,105,0.25);
+  --gist: #d97706;
+  --gist-glow: rgba(217,119,6,0.25);
+  --brin: #7c3aed;
+  --brin-glow: rgba(124,58,237,0.25);
+  --hash: #db2777;
+  --hash-glow: rgba(219,39,119,0.25);
+  --case: #0891b2;
+  --case-glow: rgba(8,145,178,0.25);
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* Subtle noise texture */
+body::after {
+  content:'';
+  position:fixed;
+  inset:0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.03'/%3E%3C/svg%3E");
+  pointer-events:none;
+  z-index:0;
+  opacity:0.4;
+}
+
+.wrap { position:relative; z-index:1; max-width:1140px; margin:0 auto; padding:48px 24px 100px; }
+
+/* ── HEADER ── */
+.header { margin-bottom:52px; }
+.header-eyebrow {
+  font-size:10px; letter-spacing:0.2em; text-transform:uppercase;
+  color:var(--muted); margin-bottom:16px;
+  display:flex; align-items:center; gap:12px;
+}
+.header-eyebrow::after { content:''; flex:1; height:1px; background:var(--border2); }
+h1 {
+  font-family: var(--serif);
+  font-size: clamp(36px, 5vw, 64px);
+  font-weight: 900;
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  margin-bottom: 14px;
+}
+h1 span { color: var(--btree); font-style:italic; }
+.header-sub {
+  font-size:12px; color:var(--muted); line-height:1.7;
+  max-width:600px;
+}
+
+/* ── TABS ── */
+.tabs { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:32px; }
+.tab {
+  font-size:11px; font-family:var(--mono); font-weight:600;
+  padding:7px 16px; border-radius:3px;
+  border:1px solid var(--border2);
+  background:var(--surface);
+  color:var(--muted);
+  cursor:pointer; transition:all 0.18s;
+  letter-spacing:0.04em;
+  position:relative;
+}
+.tab:hover { color:var(--text); border-color:var(--border2); }
+.tab.active {
+  background: var(--tc-bg, var(--surface2));
+  border-color: var(--tc, var(--btree));
+  color: var(--tc, var(--btree));
+  box-shadow: 0 0 16px var(--tc-glow, var(--btree-glow));
+}
+.tab-dot {
+  display:inline-block; width:7px; height:7px;
+  border-radius:50%; background:currentColor;
+  margin-right:6px; opacity:0.8;
+}
+
+/* ── VIEWS ── */
+.view { display:none; animation: fadeIn 0.2s ease; }
+.view.active { display:block; }
+@keyframes fadeIn { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:none} }
+
+/* ── SPLIT LAYOUT ── */
+.split {
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap:20px;
+  margin-bottom:20px;
+}
+.split-3 { grid-template-columns: 1fr 1fr 1fr; }
+
+/* ── BASE CARD ── */
+.card {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:6px;
+  overflow:hidden;
+  cursor:pointer;
+  transition:all 0.18s;
+  position:relative;
+}
+.card::before {
+  content:''; position:absolute; top:0; left:0; right:0;
+  height:2px; background:var(--c, var(--btree));
+  transform:scaleX(0); transform-origin:left;
+  transition:transform 0.25s ease;
+}
+.card:hover::before, .card.lit::before { transform:scaleX(1); }
+.card:hover, .card.lit {
+  border-color:var(--c, var(--btree));
+  box-shadow:0 0 24px var(--cg, var(--btree-glow));
+  background:var(--surface2);
+}
+.card-head {
+  padding:14px 16px 10px;
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; gap:10px;
+}
+.card-icon { font-size:20px; }
+.card-title {
+  font-size:12px; font-weight:700;
+  color:var(--c, var(--btree));
+  letter-spacing:0.05em;
+}
+.card-tag {
+  margin-left:auto; font-size:9px;
+  padding:3px 8px; border-radius:2px;
+  border:1px solid var(--c, var(--btree));
+  color:var(--c, var(--btree));
+  opacity:0.7;
+}
+.card-body { padding:12px 16px; }
+.card-desc { font-size:11px; color:var(--muted); line-height:1.7; }
+
+/* ── BTREE VISUAL ── */
+.btree-viz {
+  background:var(--surface3);
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:20px;
+  font-size:11px;
+  margin-bottom:20px;
+  overflow-x:auto;
+}
+.tree-level {
+  display:flex; justify-content:center;
+  gap:8px; margin-bottom:0;
+  position:relative;
+}
+.tree-level + .tree-level { margin-top:0; }
+.tree-node {
+  background:var(--surface2);
+  border:1px solid var(--border2);
+  border-radius:4px;
+  padding:6px 10px;
+  font-size:10px;
+  font-weight:600;
+  white-space:nowrap;
+  cursor:pointer;
+  transition:all 0.15s;
+  position:relative;
+  z-index:1;
+}
+.tree-node:hover { border-color:var(--btree); color:#60a5fa; }
+.tree-node.root { border-color:var(--btree); color:#60a5fa; background:rgba(37,99,235,0.1); }
+.tree-node.internal { border-color:rgba(37,99,235,0.4); color:#94a3b8; }
+.tree-node.leaf { border-color:rgba(16,185,129,0.4); color:#6ee7b7; font-size:9px; }
+.tree-node.leaf.active-leaf { border-color:var(--gin); background:rgba(5,150,105,0.15); color:#6ee7b7; box-shadow:0 0 12px var(--gin-glow); }
+.tree-connectors {
+  position:relative;
+  height:28px;
+  margin:0;
+}
+
+/* SVG connectors */
+.connector-svg { position:absolute; top:0; left:0; width:100%; height:100%; overflow:visible; }
+
+/* ── GIN VISUAL ── */
+.gin-inverted {
+  display:grid;
+  grid-template-columns:1fr 24px 1fr;
+  gap:0;
+  background:var(--surface3);
+  border:1px solid var(--border);
+  border-radius:6px;
+  overflow:hidden;
+  margin-bottom:20px;
+}
+.gin-col-head {
+  padding:10px 14px;
+  font-size:10px; letter-spacing:0.1em; text-transform:uppercase;
+  font-weight:700;
+  border-bottom:1px solid var(--border);
+}
+.gin-entry {
+  padding:8px 14px;
+  border-bottom:1px solid var(--border);
+  cursor:pointer;
+  transition:all 0.15s;
+  font-size:11px;
+}
+.gin-entry:last-child { border-bottom:none; }
+.gin-entry:hover, .gin-entry.lit {
+  background:rgba(5,150,105,0.08);
+}
+.gin-key { color:var(--gin); font-weight:600; }
+.gin-arrow-col {
+  background:var(--bg);
+  border-left:1px solid var(--border);
+  border-right:1px solid var(--border);
+  display:flex; flex-direction:column; align-items:center;
+  justify-content:space-around;
+  padding:10px 0;
+}
+.gin-arr { color:var(--gin); font-size:14px; opacity:0.5; }
+.gin-posting { font-size:10px; color:#94a3b8; }
+.gin-posting span { color:var(--gin); }
+
+/* ── BRIN VISUAL ── */
+.brin-track {
+  background:var(--surface3);
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:16px;
+  margin-bottom:20px;
+}
+.brin-file {
+  display:flex;
+  gap:2px;
+  margin-bottom:10px;
+  overflow-x:auto;
+}
+.brin-range {
+  flex:1; min-width:80px;
+  border-radius:4px;
+  padding:8px 6px;
+  text-align:center;
+  cursor:pointer;
+  transition:all 0.18s;
+  border:1px solid transparent;
+}
+.brin-range:hover { border-color:var(--brin); }
+.brin-range.active { border-color:var(--brin); background:rgba(124,58,237,0.12); box-shadow:0 0 12px var(--brin-glow); }
+.brin-range.skip { opacity:0.25; }
+.brin-range-label { font-size:9px; color:var(--muted); margin-bottom:4px; }
+.brin-range-val { font-size:10px; font-weight:700; line-height:1.4; }
+.brin-arrow { text-align:center; font-size:11px; color:var(--muted); margin-bottom:8px; }
+.brin-index-row {
+  display:flex; gap:2px;
+}
+.brin-idx-entry {
+  flex:1; min-width:80px;
+  background:rgba(124,58,237,0.1);
+  border:1px solid rgba(124,58,237,0.3);
+  border-radius:4px;
+  padding:6px;
+  text-align:center;
+  font-size:9px;
+  color:#a78bfa;
+}
+.brin-idx-entry.skip { opacity:0.2; }
+
+/* ── CASE SENSITIVITY ── */
+.case-split {
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:16px;
+  margin-bottom:16px;
+}
+.case-box {
+  background:var(--surface3);
+  border:1px solid var(--border);
+  border-radius:6px;
+  overflow:hidden;
+  cursor:pointer;
+  transition:all 0.18s;
+}
+.case-box:hover, .case-box.lit {
+  border-color:var(--c, var(--case));
+  box-shadow:0 0 16px var(--cg, var(--case-glow));
+}
+.case-box-head {
+  padding:10px 14px;
+  background:rgba(255,255,255,0.02);
+  border-bottom:1px solid var(--border);
+  font-size:11px; font-weight:700;
+}
+.case-box-body { padding:12px 14px; }
+.code-block {
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:10px 12px;
+  font-size:10px;
+  line-height:1.9;
+  color:#94a3b8;
+  overflow-x:auto;
+  white-space:pre;
+  margin-bottom:10px;
+}
+.c-kw { color:#569cd6; }
+.c-str { color:#ce9178; }
+.c-cmt { color:#4a5568; font-style:italic; }
+.c-fn { color:#dcdcaa; }
+.c-ok { color:#4ec9b0; }
+.c-err { color:#f44747; }
+.c-hl { color:#ffd700; }
+
+/* ── DETAIL PANEL ── */
+.detail {
+  background:var(--surface);
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:24px;
+  margin-top:20px;
+  min-height:140px;
+  position:relative;
+  overflow:hidden;
+  transition:all 0.2s;
+}
+.detail::before {
+  content:''; position:absolute;
+  top:0; left:0; right:0; height:2px;
+  background:var(--dc, var(--btree));
+  transition:background 0.2s;
+}
+.detail.empty { opacity:0.35; }
+.detail-title {
+  font-family:var(--serif);
+  font-size:18px; font-weight:700;
+  color:var(--dc, var(--btree));
+  margin-bottom:12px;
+  display:flex; align-items:center; gap:10px;
+}
+.detail-body { font-size:12px; line-height:1.85; color:#8b9ab5; }
+.detail-body strong { color:var(--text); font-weight:600; }
+.detail-body code {
+  font-family:var(--mono); font-size:11px;
+  background:rgba(255,255,255,0.06);
+  color:#7dd3fc; padding:1px 6px; border-radius:3px;
+}
+.detail-body ul { padding-left:18px; margin-top:8px; }
+.detail-body li { margin-bottom:7px; }
+.pill {
+  display:inline-block; font-size:10px;
+  padding:3px 9px; border-radius:2px; border:1px solid;
+  margin:4px 3px 0 0; font-family:var(--mono);
+}
+.pill-ok { color:#4ade80; border-color:rgba(74,222,128,0.35); background:rgba(74,222,128,0.07); }
+.pill-warn { color:#fbbf24; border-color:rgba(251,191,36,0.35); background:rgba(251,191,36,0.07); }
+.pill-err { color:#f87171; border-color:rgba(248,113,113,0.35); background:rgba(248,113,113,0.07); }
+.pill-info { color:#38bdf8; border-color:rgba(56,189,248,0.35); background:rgba(56,189,248,0.07); }
+
+/* ── COMPARISON TABLE ── */
+.cmp-table {
+  width:100%;
+  border-collapse:collapse;
+  font-size:11px;
+  margin-bottom:16px;
+}
+.cmp-table th {
+  padding:8px 12px; text-align:left;
+  background:var(--surface3); color:var(--muted);
+  font-weight:600; letter-spacing:0.06em; font-size:10px;
+  border-bottom:1px solid var(--border2);
+}
+.cmp-table td {
+  padding:8px 12px;
+  border-bottom:1px solid var(--border);
+  color:#94a3b8;
+  vertical-align:top;
+}
+.cmp-table tr:hover td { background:rgba(255,255,255,0.02); }
+.cmp-table td:first-child { font-weight:700; color:var(--text); }
+
+/* ── SEARCH SIMULATOR ── */
+.sim-wrap {
+  background:var(--surface3);
+  border:1px solid var(--border);
+  border-radius:6px;
+  padding:16px;
+  margin-bottom:16px;
+}
+.sim-title { font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); margin-bottom:12px; }
+.sim-input-row { display:flex; gap:8px; margin-bottom:12px; align-items:center; flex-wrap:wrap; }
+.sim-input {
+  flex:1; min-width:200px;
+  background:var(--bg); border:1px solid var(--border2);
+  border-radius:4px; padding:8px 12px;
+  font-family:var(--mono); font-size:12px; color:var(--text);
+  outline:none; transition:border-color 0.15s;
+}
+.sim-input:focus { border-color:var(--case); }
+.sim-select {
+  background:var(--bg); border:1px solid var(--border2);
+  border-radius:4px; padding:8px 12px;
+  font-family:var(--mono); font-size:11px; color:var(--text);
+  outline:none; cursor:pointer;
+}
+.sim-btn {
+  background:rgba(8,145,178,0.15); border:1px solid var(--case);
+  border-radius:4px; padding:8px 16px;
+  font-family:var(--mono); font-size:11px; color:#38bdf8;
+  cursor:pointer; transition:all 0.15s;
+}
+.sim-btn:hover { background:rgba(8,145,178,0.25); }
+.sim-result {
+  padding:12px 14px;
+  border-radius:4px;
+  font-size:11px; line-height:1.8;
+  border:1px solid;
+}
+.sim-result.fast { background:rgba(74,222,128,0.07); border-color:rgba(74,222,128,0.3); color:#4ade80; }
+.sim-result.slow { background:rgba(248,113,113,0.07); border-color:rgba(248,113,113,0.3); color:#f87171; }
+.sim-result.fix  { background:rgba(56,189,248,0.07); border-color:rgba(56,189,248,0.3); color:#38bdf8; }
+.sim-result.hidden { display:none; }
+
+/* ── WALK PATH ── */
+.walk-path {
+  display:flex; align-items:center; gap:6px;
+  flex-wrap:wrap;
+  background:var(--bg);
+  border:1px solid var(--border);
+  border-radius:4px;
+  padding:10px 14px;
+  margin-bottom:12px;
+  font-size:10px;
+}
+.walk-node {
+  padding:4px 10px; border-radius:3px;
+  border:1px solid; font-weight:600;
+  transition:all 0.3s;
+}
+.walk-node.active { box-shadow:0 0 10px currentColor; }
+.walk-sep { color:var(--muted); font-size:14px; }
+
+@media(max-width:700px){
+  .split, .split-3, .case-split { grid-template-columns:1fr; }
+  .gin-inverted { grid-template-columns:1fr; }
+  .gin-arrow-col { display:none; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="header">
+    <div class="header-eyebrow">postgresql · indexes · interactive guide</div>
+    <h1>PostgreSQL<br><span>Index Types</span></h1>
+    <p class="header-sub">Click any component across all tabs for detailed explanations, real examples, and interview-ready insights.</p>
+  </div>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <div class="tab active" style="--tc:var(--btree);--tc-bg:rgba(37,99,235,0.08);--tc-glow:var(--btree-glow)" onclick="switchTab('btree')"><span class="tab-dot"></span>B-Tree</div>
+    <div class="tab" style="--tc:var(--gin);--tc-bg:rgba(5,150,105,0.08);--tc-glow:var(--gin-glow)" onclick="switchTab('gin')"><span class="tab-dot" style="background:var(--gin)"></span>GIN</div>
+    <div class="tab" style="--tc:var(--gist);--tc-bg:rgba(217,119,6,0.08);--tc-glow:var(--gist-glow)" onclick="switchTab('gist')"><span class="tab-dot" style="background:var(--gist)"></span>GiST</div>
+    <div class="tab" style="--tc:var(--brin);--tc-bg:rgba(124,58,237,0.08);--tc-glow:var(--brin-glow)" onclick="switchTab('brin')"><span class="tab-dot" style="background:var(--brin)"></span>BRIN</div>
+    <div class="tab" style="--tc:var(--hash);--tc-bg:rgba(219,39,119,0.08);--tc-glow:var(--hash-glow)" onclick="switchTab('hash')"><span class="tab-dot" style="background:var(--hash)"></span>Hash</div>
+    <div class="tab" style="--tc:var(--case);--tc-bg:rgba(8,145,178,0.08);--tc-glow:var(--case-glow)" onclick="switchTab('case')"><span class="tab-dot" style="background:var(--case)"></span>Case Sensitivity</div>
+    <div class="tab" style="--tc:#94a3b8;--tc-bg:rgba(148,163,184,0.06);--tc-glow:rgba(148,163,184,0.1)" onclick="switchTab('compare')"><span class="tab-dot" style="background:#94a3b8"></span>Comparison</div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- B-TREE TAB -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="view active" id="view-btree">
+
+    <!-- Tree visualization -->
+    <div class="btree-viz" id="btree-viz">
+      <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:16px">B-Tree structure — click any node</div>
+
+      <!-- Root -->
+      <div class="tree-level">
+        <div class="tree-node root" onclick="showBTreeDetail('root')" id="btn-root">[50 | 100]</div>
+      </div>
+
+      <!-- Connector lines via SVG -->
+      <div style="height:28px;position:relative;width:100%;margin:0">
+        <svg viewBox="0 0 600 28" preserveAspectRatio="none" style="width:100%;height:28px">
+          <line x1="300" y1="0" x2="140" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="300" y1="0" x2="300" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="300" y1="0" x2="460" y2="28" stroke="#21293d" stroke-width="1.5"/>
+        </svg>
+      </div>
+
+      <!-- Internal nodes -->
+      <div class="tree-level" style="gap:40px">
+        <div class="tree-node internal" onclick="showBTreeDetail('internal')" id="btn-int1">[10 | 30]</div>
+        <div class="tree-node internal" onclick="showBTreeDetail('internal')" id="btn-int2">[60 | 80]</div>
+        <div class="tree-node internal" onclick="showBTreeDetail('internal')" id="btn-int3">[110 | 130]</div>
+      </div>
+
+      <div style="height:28px;position:relative;width:100%;margin:0">
+        <svg viewBox="0 0 600 28" preserveAspectRatio="none" style="width:100%;height:28px">
+          <line x1="95" y1="0" x2="48" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="95" y1="0" x2="96" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="95" y1="0" x2="144" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="300" y1="0" x2="250" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="300" y1="0" x2="300" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="300" y1="0" x2="350" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="505" y1="0" x2="456" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="505" y1="0" x2="505" y2="28" stroke="#21293d" stroke-width="1.5"/>
+          <line x1="505" y1="0" x2="554" y2="28" stroke="#21293d" stroke-width="1.5"/>
+        </svg>
+      </div>
+
+      <!-- Leaf nodes -->
+      <div class="tree-level" style="gap:6px;flex-wrap:wrap">
+        <div class="tree-node leaf" onclick="showBTreeDetail('leaf_normal')">[5→(0,3)] [8→(1,2)] [9→(2,7)]</div>
+        <div class="tree-node leaf" onclick="showBTreeDetail('leaf_normal')">[15→(3,1)] [25→(3,4)] [28→(4,2)]</div>
+        <div class="tree-node leaf" onclick="showBTreeDetail('leaf_normal')">[35→(5,1)] [42→(6,3)] [47→(7,1)]</div>
+        <div class="tree-node leaf active-leaf" onclick="showBTreeDetail('leaf_active')" id="btn-leaf-active">[55→(8,2)] [<span style="color:#fbbf24">73→(41,7)</span>] [78→(9,4)]</div>
+        <div class="tree-node leaf" onclick="showBTreeDetail('leaf_normal')">[82→(10,1)] [91→(11,3)] [95→(12,2)]</div>
+        <div class="tree-node leaf" onclick="showBTreeDetail('leaf_normal')">[103→(13,5)] [107→(14,1)] [109→(14,3)]</div>
+        <div class="tree-node leaf" onclick="showBTreeDetail('leaf_normal')">[115→(15,2)] [122→(16,4)] [128→(17,1)]</div>
+        <div class="tree-node leaf" onclick="showBTreeDetail('leaf_normal')">[133→(18,3)] [141→(19,2)] [148→(20,1)]</div>
+        <div class="tree-node leaf" onclick="showBTreeDetail('leaf_normal')">[152→(21,4)] [160→(22,1)] [175→(23,3)]</div>
+      </div>
+
+      <div style="margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <span style="font-size:10px;color:var(--muted)">Leaf nodes linked:</span>
+        <span style="font-size:10px;color:var(--btree)">←→ doubly linked list for range scans</span>
+        <span style="font-size:10px;color:var(--muted);margin-left:auto">Entry format: key → (page, slot)</span>
+      </div>
+    </div>
+
+    <!-- Walk path -->
+    <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:8px">Lookup trace: WHERE id = 73</div>
+    <div class="walk-path" id="walk-path">
+      <div class="walk-node" style="color:#60a5fa;border-color:rgba(96,165,250,0.4)" id="wp-root">Root [50|100]</div>
+      <div class="walk-sep">→</div>
+      <div class="walk-node" style="color:#94a3b8;border-color:rgba(148,163,184,0.3)" id="wp-int">Internal [60|80]</div>
+      <div class="walk-sep">→</div>
+      <div class="walk-node" style="color:#6ee7b7;border-color:rgba(110,231,183,0.4)" id="wp-leaf">Leaf [55|73|78]</div>
+      <div class="walk-sep">→</div>
+      <div class="walk-node" style="color:#fbbf24;border-color:rgba(251,191,36,0.4)" id="wp-heap">Heap (41,7)</div>
+      <div class="walk-sep">→</div>
+      <div class="walk-node" style="color:#4ade80;border-color:rgba(74,222,128,0.4)" id="wp-row">Row returned ✓</div>
+    </div>
+
+    <!-- Feature cards -->
+    <div class="split">
+      <div class="card" style="--c:var(--btree);--cg:var(--btree-glow)" onclick="detail('btree_supports')">
+        <div class="card-head"><span class="card-icon">✅</span><span class="card-title">Supported Operations</span></div>
+        <div class="card-body"><div class="card-desc">=, &lt;, &gt;, ≤, ≥, BETWEEN, IN, IS NULL, ORDER BY, LIKE 'prefix%'</div></div>
+      </div>
+      <div class="card" style="--c:var(--btree);--cg:var(--btree-glow)" onclick="detail('btree_notsupp')">
+        <div class="card-head"><span class="card-icon">❌</span><span class="card-title">NOT Supported</span></div>
+        <div class="card-body"><div class="card-desc">LIKE '%suffix', full-text, array containment, geometric ops</div></div>
+      </div>
+      <div class="card" style="--c:var(--btree);--cg:var(--btree-glow)" onclick="detail('btree_partial')">
+        <div class="card-head"><span class="card-icon">🔪</span><span class="card-title">Partial Index</span><span class="card-tag">Advanced</span></div>
+        <div class="card-body"><div class="card-desc">WHERE status = 'active' — only index qualifying rows. Tiny, fast.</div></div>
+      </div>
+      <div class="card" style="--c:var(--btree);--cg:var(--btree-glow)" onclick="detail('btree_covering')">
+        <div class="card-head"><span class="card-icon">🛡️</span><span class="card-title">Covering Index (INCLUDE)</span><span class="card-tag">Advanced</span></div>
+        <div class="card-body"><div class="card-desc">INCLUDE (col) on leaf pages → index-only scan, zero heap fetches.</div></div>
+      </div>
+      <div class="card" style="--c:var(--btree);--cg:var(--btree-glow)" onclick="detail('btree_composite')">
+        <div class="card-head"><span class="card-icon">🎯</span><span class="card-title">Composite Index</span><span class="card-tag">Important</span></div>
+        <div class="card-body"><div class="card-desc">ON (a, b) — leftmost prefix rule. Column order matters enormously.</div></div>
+      </div>
+      <div class="card" style="--c:var(--btree);--cg:var(--btree-glow)" onclick="detail('btree_expr')">
+        <div class="card-head"><span class="card-icon">ƒ</span><span class="card-title">Expression Index</span><span class="card-tag">Advanced</span></div>
+        <div class="card-body"><div class="card-desc">ON (lower(email)) — index computed value. Must match query exactly.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- GIN TAB -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="view" id="view-gin">
+
+    <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:14px">Inverted index — each element maps to all rows containing it</div>
+
+    <!-- Inverted index visual -->
+    <div class="gin-inverted">
+      <div>
+        <div class="gin-col-head" style="color:var(--gin)">Index Keys (elements)</div>
+        <div class="gin-entry" onclick="detail('gin_key_type')" id="ge-type_click"><span class="gin-key">type="click"</span></div>
+        <div class="gin-entry" onclick="detail('gin_key_type')" id="ge-type_purchase"><span class="gin-key">type="purchase"</span></div>
+        <div class="gin-entry" onclick="detail('gin_key_type')" id="ge-type_signup"><span class="gin-key">type="signup"</span></div>
+        <div class="gin-entry" onclick="detail('gin_key_page')" id="ge-page_home"><span class="gin-key">page="home"</span></div>
+        <div class="gin-entry" onclick="detail('gin_key_page')" id="ge-page_checkout"><span class="gin-key">page="checkout"</span></div>
+        <div class="gin-entry" onclick="detail('gin_key_page')" id="ge-page_pricing"><span class="gin-key">page="pricing"</span></div>
+        <div class="gin-entry" onclick="detail('gin_key_uid')" id="ge-uid_1"><span class="gin-key">user_id=1</span></div>
+        <div class="gin-entry" onclick="detail('gin_key_uid')" id="ge-uid_2"><span class="gin-key">user_id=2</span></div>
+        <div class="gin-entry" onclick="detail('gin_key_uid')" id="ge-uid_3"><span class="gin-key">user_id=3</span></div>
+      </div>
+      <div class="gin-arrow-col">
+        <div class="gin-arr">→</div><div class="gin-arr">→</div><div class="gin-arr">→</div>
+        <div class="gin-arr">→</div><div class="gin-arr">→</div><div class="gin-arr">→</div>
+        <div class="gin-arr">→</div><div class="gin-arr">→</div><div class="gin-arr">→</div>
+      </div>
+      <div>
+        <div class="gin-col-head" style="color:var(--gin)">Posting Lists (row ctids)</div>
+        <div class="gin-entry"><div class="gin-posting">rows: <span>(0,1)</span> <span>(0,3)</span></div></div>
+        <div class="gin-entry"><div class="gin-posting">rows: <span>(0,2)</span></div></div>
+        <div class="gin-entry"><div class="gin-posting">rows: <span>(0,4)</span></div></div>
+        <div class="gin-entry"><div class="gin-posting">rows: <span>(0,1)</span> <span>(0,4)</span></div></div>
+        <div class="gin-entry"><div class="gin-posting">rows: <span>(0,2)</span></div></div>
+        <div class="gin-entry"><div class="gin-posting">rows: <span>(0,3)</span></div></div>
+        <div class="gin-entry"><div class="gin-posting">rows: <span>(0,1)</span> <span>(0,3)</span></div></div>
+        <div class="gin-entry"><div class="gin-posting">rows: <span>(0,2)</span></div></div>
+        <div class="gin-entry"><div class="gin-posting">rows: <span>(0,4)</span></div></div>
+      </div>
+    </div>
+
+    <!-- Intersection visual -->
+    <div style="background:var(--surface3);border:1px solid var(--border);border-radius:6px;padding:16px;margin-bottom:16px;font-size:11px">
+      <div style="color:var(--muted);font-size:10px;text-transform:uppercase;letter-spacing:0.1em;margin-bottom:10px">Query: WHERE data @> '{"type":"click","page":"home"}' — GIN intersects posting lists</div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <div style="background:rgba(5,150,105,0.1);border:1px solid rgba(5,150,105,0.3);border-radius:4px;padding:6px 12px">
+          <span style="color:var(--gin)">type="click"</span> → <span style="color:#94a3b8">{row1, row3}</span>
+        </div>
+        <div style="color:var(--muted);font-size:18px">∩</div>
+        <div style="background:rgba(5,150,105,0.1);border:1px solid rgba(5,150,105,0.3);border-radius:4px;padding:6px 12px">
+          <span style="color:var(--gin)">page="home"</span> → <span style="color:#94a3b8">{row1, row4}</span>
+        </div>
+        <div style="color:var(--muted);font-size:18px">=</div>
+        <div style="background:rgba(74,222,128,0.1);border:1px solid rgba(74,222,128,0.4);border-radius:4px;padding:6px 12px">
+          <span style="color:#4ade80">Result: {row1} ✓</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="split">
+      <div class="card" style="--c:var(--gin);--cg:var(--gin-glow)" onclick="detail('gin_usecases')">
+        <div class="card-head"><span class="card-icon">🎯</span><span class="card-title">When to Use GIN</span></div>
+        <div class="card-body"><div class="card-desc">JSONB @>, arrays, full-text tsvector, trigrams (pg_trgm). Multi-valued attributes.</div></div>
+      </div>
+      <div class="card" style="--c:var(--gin);--cg:var(--gin-glow)" onclick="detail('gin_pending')">
+        <div class="card-head"><span class="card-icon">📋</span><span class="card-title">Pending List (fastupdate)</span><span class="card-tag">Performance</span></div>
+        <div class="card-body"><div class="card-desc">Writes buffer to a pending list, merge on VACUUM. Why GIN queries sometimes spike.</div></div>
+      </div>
+      <div class="card" style="--c:var(--gin);--cg:var(--gin-glow)" onclick="detail('gin_operators')">
+        <div class="card-head"><span class="card-icon">🔧</span><span class="card-title">GIN Operators</span></div>
+        <div class="card-body"><div class="card-desc">@> containment, ? key exists, ?& all keys, ?| any key, @@ full-text match</div></div>
+      </div>
+      <div class="card" style="--c:var(--gin);--cg:var(--gin-glow)" onclick="detail('gin_trgm')">
+        <div class="card-head"><span class="card-icon">🔍</span><span class="card-title">Trigram Search (pg_trgm)</span><span class="card-tag">Advanced</span></div>
+        <div class="card-body"><div class="card-desc">Enables LIKE '%middle%' with index. Split text into 3-char grams, store all in GIN.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- GiST TAB -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="view" id="view-gist">
+    <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:14px">Generalized search tree — custom containment logic per data type</div>
+
+    <!-- Bounding box visual for ranges -->
+    <div style="background:var(--surface3);border:1px solid var(--border);border-radius:6px;padding:20px;margin-bottom:16px">
+      <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:14px">Hotel bookings — GiST range overlap exclusion</div>
+      <div style="position:relative;height:120px;background:var(--bg);border-radius:4px;overflow:hidden;border:1px solid var(--border)">
+        <!-- Timeline axis -->
+        <div style="position:absolute;bottom:12px;left:0;right:0;height:1px;background:var(--border2)"></div>
+        <div style="position:absolute;bottom:4px;left:5%;font-size:9px;color:var(--muted)">Mar 1</div>
+        <div style="position:absolute;bottom:4px;left:25%;font-size:9px;color:var(--muted)">Mar 8</div>
+        <div style="position:absolute;bottom:4px;left:47%;font-size:9px;color:var(--muted)">Mar 15</div>
+        <div style="position:absolute;bottom:4px;left:68%;font-size:9px;color:var(--muted)">Mar 22</div>
+        <div style="position:absolute;bottom:4px;left:88%;font-size:9px;color:var(--muted)">Mar 29</div>
+        <!-- Bookings -->
+        <div onclick="detail('gist_booking_a')" style="position:absolute;left:5%;width:28%;top:15px;height:22px;background:rgba(217,119,6,0.25);border:1px solid var(--gist);border-radius:3px;cursor:pointer;display:flex;align-items:center;padding:0 8px;font-size:10px;color:#fbbf24;transition:all 0.15s" onmouseover="this.style.background='rgba(217,119,6,0.4)'" onmouseout="this.style.background='rgba(217,119,6,0.25)'">Room 101 · Alice</div>
+        <div onclick="detail('gist_booking_b')" style="position:absolute;left:35%;width:25%;top:15px;height:22px;background:rgba(217,119,6,0.25);border:1px solid var(--gist);border-radius:3px;cursor:pointer;display:flex;align-items:center;padding:0 8px;font-size:10px;color:#fbbf24;transition:all 0.15s" onmouseover="this.style.background='rgba(217,119,6,0.4)'" onmouseout="this.style.background='rgba(217,119,6,0.25)'">Room 101 · Bob</div>
+        <div onclick="detail('gist_booking_overlap')" style="position:absolute;left:55%;width:30%;top:15px;height:22px;background:rgba(248,113,113,0.2);border:2px dashed #f87171;border-radius:3px;cursor:pointer;display:flex;align-items:center;padding:0 8px;font-size:10px;color:#f87171;transition:all 0.15s" onmouseover="this.style.background='rgba(248,113,113,0.35)'" onmouseout="this.style.background='rgba(248,113,113,0.2)'">❌ CONFLICT!</div>
+        <div onclick="detail('gist_booking_c')" style="position:absolute;left:5%;width:20%;top:48px;height:22px;background:rgba(16,185,129,0.15);border:1px solid var(--gin);border-radius:3px;cursor:pointer;display:flex;align-items:center;padding:0 8px;font-size:10px;color:#6ee7b7;transition:all 0.15s" onmouseover="this.style.background='rgba(16,185,129,0.3)'" onmouseout="this.style.background='rgba(16,185,129,0.15)'">Room 102 · Carol</div>
+        <div onclick="detail('gist_booking_c')" style="position:absolute;left:28%;width:32%;top:48px;height:22px;background:rgba(16,185,129,0.15);border:1px solid var(--gin);border-radius:3px;cursor:pointer;display:flex;align-items:center;padding:0 8px;font-size:10px;color:#6ee7b7;transition:all 0.15s" onmouseover="this.style.background='rgba(16,185,129,0.3)'" onmouseout="this.style.background='rgba(16,185,129,0.15)'">Room 102 · Dave</div>
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:#64748b">GiST powers <code style="font-size:10px;background:rgba(217,119,6,0.1);color:#fbbf24;padding:1px 6px;border-radius:3px">EXCLUDE USING GIST (room_id WITH =, during WITH &&)</code> — database-enforced no-overlap constraint</div>
+    </div>
+
+    <div class="split">
+      <div class="card" style="--c:var(--gist);--cg:var(--gist-glow)" onclick="detail('gist_usecases')">
+        <div class="card-head"><span class="card-icon">🎯</span><span class="card-title">When to Use GiST</span></div>
+        <div class="card-body"><div class="card-desc">Range types, PostGIS geometry, exclusion constraints, nearest-neighbor search.</div></div>
+      </div>
+      <div class="card" style="--c:var(--gist);--cg:var(--gist-glow)" onclick="detail('gist_lossy')">
+        <div class="card-head"><span class="card-icon">🔍</span><span class="card-title">Lossy Storage & Recheck</span><span class="card-tag">Important</span></div>
+        <div class="card-body"><div class="card-desc">Stores bounding box approximations. May return false positives that are rechecked.</div></div>
+      </div>
+      <div class="card" style="--c:var(--gist);--cg:var(--gist-glow)" onclick="detail('gist_excl')">
+        <div class="card-head"><span class="card-icon">🚫</span><span class="card-title">Exclusion Constraints</span><span class="card-tag">Unique</span></div>
+        <div class="card-body"><div class="card-desc">Prevent overlapping ranges — only possible with GiST. Used in booking systems.</div></div>
+      </div>
+      <div class="card" style="--c:var(--gist);--cg:var(--gist-glow)" onclick="detail('gist_vs_gin')">
+        <div class="card-head"><span class="card-icon">⚖️</span><span class="card-title">GiST vs GIN</span></div>
+        <div class="card-body"><div class="card-desc">GiST: faster writes, lossy. GIN: faster reads, exact. For FTS: GIN on static, GiST on frequently updated.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- BRIN TAB -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="view" id="view-brin">
+    <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:14px">Block range index — stores min/max per page range, not individual values</div>
+
+    <div class="brin-track">
+      <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:12px">IoT sensor table — 8M rows, inserted in time order. Query: WHERE recorded_at > 'Jul 1'</div>
+
+      <!-- Heap pages -->
+      <div style="font-size:10px;color:var(--muted);margin-bottom:6px">Heap file — page ranges (128 pages each):</div>
+      <div class="brin-file">
+        <div class="brin-range skip" onclick="detail('brin_range_skip')" style="background:rgba(100,116,139,0.1);border-color:var(--border)">
+          <div class="brin-range-label">Pages 0–127</div>
+          <div class="brin-range-val" style="color:#4b5563">Jan 1<br>–<br>Feb 15</div>
+        </div>
+        <div class="brin-range skip" onclick="detail('brin_range_skip')" style="background:rgba(100,116,139,0.1);border-color:var(--border)">
+          <div class="brin-range-label">Pages 128–255</div>
+          <div class="brin-range-val" style="color:#4b5563">Feb 15<br>–<br>Apr 1</div>
+        </div>
+        <div class="brin-range skip" onclick="detail('brin_range_skip')" style="background:rgba(100,116,139,0.1);border-color:var(--border)">
+          <div class="brin-range-label">Pages 256–383</div>
+          <div class="brin-range-val" style="color:#4b5563">Apr 1<br>–<br>Jun 1</div>
+        </div>
+        <div class="brin-range skip" onclick="detail('brin_range_skip')" style="background:rgba(100,116,139,0.1);border-color:var(--border)">
+          <div class="brin-range-label">Pages 384–511</div>
+          <div class="brin-range-val" style="color:#4b5563">Jun 1<br>–<br>Jul 1</div>
+        </div>
+        <div class="brin-range active" onclick="detail('brin_range_active')" style="background:rgba(124,58,237,0.15)">
+          <div class="brin-range-label" style="color:#a78bfa">Pages 512–639</div>
+          <div class="brin-range-val" style="color:#c4b5fd">Jul 1<br>–<br>Aug 15 ✓</div>
+        </div>
+        <div class="brin-range active" onclick="detail('brin_range_active')" style="background:rgba(124,58,237,0.15)">
+          <div class="brin-range-label" style="color:#a78bfa">Pages 640–767</div>
+          <div class="brin-range-val" style="color:#c4b5fd">Aug 15<br>–<br>Oct 1 ✓</div>
+        </div>
+        <div class="brin-range active" onclick="detail('brin_range_active')" style="background:rgba(124,58,237,0.15)">
+          <div class="brin-range-label" style="color:#a78bfa">Pages 768–895</div>
+          <div class="brin-range-val" style="color:#c4b5fd">Oct 1<br>–<br>Dec 1 ✓</div>
+        </div>
+      </div>
+
+      <div class="brin-arrow">↕ BRIN index (entire file) ↕</div>
+
+      <!-- BRIN index entries -->
+      <div style="font-size:10px;color:var(--muted);margin-bottom:6px">BRIN index — stores only min/max per range (tiny!):</div>
+      <div class="brin-index-row">
+        <div class="brin-idx-entry skip">min:Jan1<br>max:Feb15<br>SKIP ✗</div>
+        <div class="brin-idx-entry skip">min:Feb15<br>max:Apr1<br>SKIP ✗</div>
+        <div class="brin-idx-entry skip">min:Apr1<br>max:Jun1<br>SKIP ✗</div>
+        <div class="brin-idx-entry skip">min:Jun1<br>max:Jul1<br>SKIP ✗</div>
+        <div class="brin-idx-entry">min:Jul1<br>max:Aug15<br>READ ✓</div>
+        <div class="brin-idx-entry">min:Aug15<br>max:Oct1<br>READ ✓</div>
+        <div class="brin-idx-entry">min:Oct1<br>max:Dec1<br>READ ✓</div>
+      </div>
+
+      <div style="margin-top:12px;font-size:11px;color:#64748b">
+        Query skips <strong style="color:var(--text)">512 pages</strong> (4MB) instantly. Only reads <strong style="color:#a78bfa">384 pages</strong> of actual data.
+        BRIN index size: <strong style="color:var(--text)">~2KB</strong> vs B-Tree equivalent: <strong style="color:var(--text)">~200MB</strong>
+      </div>
+    </div>
+
+    <div class="split">
+      <div class="card" style="--c:var(--brin);--cg:var(--brin-glow)" onclick="detail('brin_usecases')">
+        <div class="card-head"><span class="card-icon">🎯</span><span class="card-title">When to Use BRIN</span></div>
+        <div class="card-body"><div class="card-desc">Append-only time-series, sequential IDs, naturally-ordered data. Correlation near 1.0.</div></div>
+      </div>
+      <div class="card" style="--c:var(--brin);--cg:var(--brin-glow)" onclick="detail('brin_correlation')">
+        <div class="card-head"><span class="card-icon">📊</span><span class="card-title">Correlation Check</span><span class="card-tag">Critical</span></div>
+        <div class="card-body"><div class="card-desc">SELECT correlation FROM pg_stats — must be near ±1.0 for BRIN to work.</div></div>
+      </div>
+      <div class="card" style="--c:var(--brin);--cg:var(--brin-glow)" onclick="detail('brin_pages_range')">
+        <div class="card-head"><span class="card-icon">⚙️</span><span class="card-title">pages_per_range Tuning</span></div>
+        <div class="card-body"><div class="card-desc">Default 128. Smaller = more precise pruning, bigger index. Larger = less precise.</div></div>
+      </div>
+      <div class="card" style="--c:var(--brin);--cg:var(--brin-glow)" onclick="detail('brin_size')">
+        <div class="card-head"><span class="card-icon">🪶</span><span class="card-title">Tiny Index Size</span><span class="card-tag">Key benefit</span></div>
+        <div class="card-body"><div class="card-desc">100M-row BRIN: ~50KB. Same B-Tree: ~2GB. Fits entirely in shared_buffers.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- HASH TAB -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="view" id="view-hash">
+    <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:14px">Hash index — O(1) equality lookup, nothing else</div>
+
+    <div style="background:var(--surface3);border:1px solid var(--border);border-radius:6px;padding:20px;margin-bottom:16px">
+      <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:14px">How hash lookup works</div>
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px">
+        <div style="background:rgba(219,39,119,0.1);border:1px solid rgba(219,39,119,0.3);border-radius:4px;padding:10px 14px;cursor:pointer" onclick="detail('hash_fn')">
+          <div style="color:var(--muted);font-size:9px;margin-bottom:4px">Input</div>
+          <div style="color:var(--hash);font-weight:700">'alice@example.com'</div>
+        </div>
+        <div style="color:var(--muted);font-size:18px">→</div>
+        <div style="background:rgba(219,39,119,0.1);border:1px solid rgba(219,39,119,0.3);border-radius:4px;padding:10px 14px;cursor:pointer" onclick="detail('hash_fn')">
+          <div style="color:var(--muted);font-size:9px;margin-bottom:4px">hash()</div>
+          <div style="color:#f472b6;font-weight:700">0x4A2F...</div>
+        </div>
+        <div style="color:var(--muted);font-size:18px">→</div>
+        <div style="background:rgba(219,39,119,0.1);border:1px solid rgba(219,39,119,0.3);border-radius:4px;padding:10px 14px;cursor:pointer" onclick="detail('hash_bucket')">
+          <div style="color:var(--muted);font-size:9px;margin-bottom:4px">Bucket #</div>
+          <div style="color:var(--hash);font-weight:700">Bucket 42</div>
+        </div>
+        <div style="color:var(--muted);font-size:18px">→</div>
+        <div style="background:rgba(74,222,128,0.1);border:1px solid rgba(74,222,128,0.4);border-radius:4px;padding:10px 14px">
+          <div style="color:var(--muted);font-size:9px;margin-bottom:4px">Found</div>
+          <div style="color:#4ade80;font-weight:700">ctid (3,7) ✓</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="split">
+      <div class="card" style="--c:var(--hash);--cg:var(--hash-glow)" onclick="detail('hash_only_eq')">
+        <div class="card-head"><span class="card-icon">⚠️</span><span class="card-title">Equality Only</span><span class="card-tag">Limitation</span></div>
+        <div class="card-body"><div class="card-desc">Only = operator. No ranges, no ORDER BY, no LIKE. Never range scan.</div></div>
+      </div>
+      <div class="card" style="--c:var(--hash);--cg:var(--hash-glow)" onclick="detail('hash_vs_btree')">
+        <div class="card-head"><span class="card-icon">⚖️</span><span class="card-title">Hash vs B-Tree</span></div>
+        <div class="card-body"><div class="card-desc">O(1) theory vs O(log n) B-Tree. In practice: B-Tree height is 3–4. Difference negligible.</div></div>
+      </div>
+      <div class="card" style="--c:var(--hash);--cg:var(--hash-glow)" onclick="detail('hash_when')">
+        <div class="card-head"><span class="card-icon">🤔</span><span class="card-title">When to Actually Use It</span></div>
+        <div class="card-body"><div class="card-desc">Rarely. Only if equality lookups on very long keys (UUIDs, long strings) and you've benchmarked it.</div></div>
+      </div>
+      <div class="card" style="--c:var(--hash);--cg:var(--hash-glow)" onclick="detail('hash_wal')">
+        <div class="card-head"><span class="card-icon">📜</span><span class="card-title">WAL History</span><span class="card-tag">Interview</span></div>
+        <div class="card-body"><div class="card-desc">Pre-PG10: not WAL-logged → not crash-safe. PG10+: fixed. Still rarely chosen.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- CASE SENSITIVITY TAB -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="view" id="view-case">
+    <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:14px">Why some searches are fast and others slow — case sensitivity trap</div>
+
+    <!-- Simulator -->
+    <div class="sim-wrap">
+      <div class="sim-title">⚡ Search Simulator — try different queries</div>
+      <div class="sim-input-row">
+        <input class="sim-input" id="sim-email" placeholder="Type an email to search..." value="Alice@Example.com">
+        <select class="sim-select" id="sim-method">
+          <option value="eq">WHERE email = ?</option>
+          <option value="lower">WHERE lower(email) = lower(?)</option>
+          <option value="ilike">WHERE email ILIKE ?</option>
+          <option value="lower_idx">WHERE lower(email) = ? (with expression index)</option>
+          <option value="citext">Using citext column type</option>
+        </select>
+        <button class="sim-btn" onclick="runSim()">▶ Run</button>
+      </div>
+      <div class="sim-result hidden" id="sim-result"></div>
+    </div>
+
+    <div class="case-split">
+      <div class="case-box" style="--c:var(--case);--cg:var(--case-glow)" onclick="detail('case_problem')">
+        <div class="case-box-head" style="color:#f87171">❌ The Problem — Index Bypassed</div>
+        <div class="case-box-body">
+          <div class="code-block"><span class="c-cmt">-- Mixed-case stored data:</span>
+<span class="c-kw">INSERT INTO</span> users (email) <span class="c-kw">VALUES</span>
+  (<span class="c-str">'alice@example.com'</span>),  <span class="c-cmt">-- lowercase</span>
+  (<span class="c-str">'BOB@EXAMPLE.COM'</span>),    <span class="c-cmt">-- uppercase</span>
+  (<span class="c-str">'Charlie@Mix.Com'</span>);   <span class="c-cmt">-- mixed</span>
+
+<span class="c-cmt">-- Plain B-Tree index:</span>
+<span class="c-kw">CREATE INDEX</span> idx_email <span class="c-kw">ON</span> users (email);
+
+<span class="c-cmt">-- SLOW: lower() bypasses the index!</span>
+<span class="c-kw">SELECT</span> * <span class="c-kw">FROM</span> users
+<span class="c-kw">WHERE</span> <span class="c-fn">lower</span>(email) = <span class="c-str">'alice@example.com'</span>;
+<span class="c-err">-- → Seq Scan (index ignored) 🐢</span></div>
+        </div>
+      </div>
+
+      <div class="case-box" style="--c:var(--gin);--cg:var(--gin-glow)" onclick="detail('case_fix_expr')">
+        <div class="case-box-head" style="color:#4ade80">✅ Fix 1 — Expression Index</div>
+        <div class="case-box-body">
+          <div class="code-block"><span class="c-cmt">-- Index the expression, not the column:</span>
+<span class="c-kw">CREATE INDEX</span> idx_email_lower
+  <span class="c-kw">ON</span> users (<span class="c-fn">lower</span>(email));
+
+<span class="c-cmt">-- Now this uses the index:</span>
+<span class="c-kw">SELECT</span> * <span class="c-kw">FROM</span> users
+<span class="c-kw">WHERE</span> <span class="c-fn">lower</span>(email) =
+  <span class="c-fn">lower</span>(<span class="c-str">'Alice@Example.com'</span>);
+<span class="c-ok">-- → Index Scan ✓ 🚀</span>
+
+<span class="c-cmt">-- Index stores lower() of every email</span>
+<span class="c-cmt">-- Query applies lower() once to constant</span></div>
+        </div>
+      </div>
+
+      <div class="case-box" style="--c:var(--gist);--cg:var(--gist-glow)" onclick="detail('case_fix_citext')">
+        <div class="case-box-head" style="color:#fbbf24">✅ Fix 2 — citext Extension</div>
+        <div class="case-box-body">
+          <div class="code-block"><span class="c-kw">CREATE EXTENSION</span> citext;
+
+<span class="c-cmt">-- Change column to case-insensitive type:</span>
+<span class="c-kw">ALTER TABLE</span> users
+  <span class="c-kw">ALTER COLUMN</span> email
+  <span class="c-kw">TYPE</span> citext;
+
+<span class="c-cmt">-- Plain index now works for all cases:</span>
+<span class="c-kw">CREATE INDEX</span> idx_email <span class="c-kw">ON</span> users (email);
+
+<span class="c-ok">-- All of these use the index AND match:</span>
+<span class="c-kw">WHERE</span> email = <span class="c-str">'Alice@Example.com'</span>  <span class="c-ok">✓</span>
+<span class="c-kw">WHERE</span> email = <span class="c-str">'ALICE@EXAMPLE.COM'</span>  <span class="c-ok">✓</span>
+<span class="c-kw">WHERE</span> email = <span class="c-str">'alice@example.com'</span>  <span class="c-ok">✓</span></div>
+        </div>
+      </div>
+
+      <div class="case-box" style="--c:var(--brin);--cg:var(--brin-glow)" onclick="detail('case_fix_trgm')">
+        <div class="case-box-head" style="color:#a78bfa">✅ Fix 3 — pg_trgm for LIKE</div>
+        <div class="case-box-body">
+          <div class="code-block"><span class="c-kw">CREATE EXTENSION</span> pg_trgm;
+
+<span class="c-cmt">-- GIN trigram index supports LIKE '%x%':</span>
+<span class="c-kw">CREATE INDEX</span> idx_email_trgm
+  <span class="c-kw">ON</span> users <span class="c-kw">USING GIN</span>
+  (email gin_trgm_ops);
+
+<span class="c-cmt">-- Now these use the index:</span>
+<span class="c-kw">WHERE</span> email <span class="c-kw">ILIKE</span> <span class="c-str">'%alice%'</span>       <span class="c-ok">✓</span>
+<span class="c-kw">WHERE</span> email <span class="c-kw">LIKE</span> <span class="c-str">'%example.com'</span>  <span class="c-ok">✓</span>
+<span class="c-cmt">-- Even middle-of-string patterns!</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="split" style="margin-top:4px">
+      <div class="card" style="--c:var(--case);--cg:var(--case-glow)" onclick="detail('case_planner_ignore')">
+        <div class="card-head"><span class="card-icon">🕵️</span><span class="card-title">Why Planner Ignores Index</span></div>
+        <div class="card-body"><div class="card-desc">Function on column (lower(email)) = index can't be used. Function must be in the index, not the query column.</div></div>
+      </div>
+      <div class="card" style="--c:var(--case);--cg:var(--case-glow)" onclick="detail('case_enforce')">
+        <div class="card-head"><span class="card-icon">🛡️</span><span class="card-title">Enforce Consistency at Storage</span></div>
+        <div class="card-body"><div class="card-desc">Trigger or CHECK constraint to normalize email to lowercase on INSERT/UPDATE.</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- COMPARISON TAB -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="view" id="view-compare">
+    <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:14px">Side-by-side comparison — pick the right index for your use case</div>
+
+    <table class="cmp-table">
+      <tr>
+        <th>Index</th><th>Best For</th><th>Write Speed</th><th>Read Speed</th><th>Size</th><th>Operators</th>
+      </tr>
+      <tr onclick="detail('cmp_btree')" style="cursor:pointer">
+        <td style="color:var(--btree)">B-Tree</td>
+        <td>General purpose, ranges, ORDER BY</td>
+        <td>Fast</td><td>Fast (O log n)</td><td>Medium</td>
+        <td>=, &lt;, &gt;, BETWEEN, LIKE 'x%'</td>
+      </tr>
+      <tr onclick="detail('cmp_gin')" style="cursor:pointer">
+        <td style="color:var(--gin)">GIN</td>
+        <td>JSONB, arrays, full-text, trigrams</td>
+        <td>Slow (many entries)</td><td>Very fast</td><td>Large</td>
+        <td>@&gt;, ?, ?&amp;, ?|, @@</td>
+      </tr>
+      <tr onclick="detail('cmp_gist')" style="cursor:pointer">
+        <td style="color:var(--gist)">GiST</td>
+        <td>Ranges, geometry, exclusion constraints</td>
+        <td>Medium</td><td>Fast (+ recheck)</td><td>Medium</td>
+        <td>&amp;&amp;, @&gt;, &lt;-&gt; (nearest)</td>
+      </tr>
+      <tr onclick="detail('cmp_brin')" style="cursor:pointer">
+        <td style="color:var(--brin)">BRIN</td>
+        <td>Ordered append-only data, time-series</td>
+        <td>Very fast</td><td>Good (if ordered)</td><td>Tiny</td>
+        <td>=, &lt;, &gt;, BETWEEN</td>
+      </tr>
+      <tr onclick="detail('cmp_hash')" style="cursor:pointer">
+        <td style="color:var(--hash)">Hash</td>
+        <td>Equality on long keys</td>
+        <td>Fast</td><td>O(1)</td><td>Medium</td>
+        <td>= only</td>
+      </tr>
+    </table>
+
+    <div style="font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:12px;margin-top:8px">Decision tree — click a scenario</div>
+    <div class="split-3">
+      <div class="card" style="--c:#60a5fa;--cg:rgba(96,165,250,0.2)" onclick="detail('dt_general')">
+        <div class="card-head"><span class="card-icon">❓</span><span class="card-title" style="color:#60a5fa">General column query?</span></div>
+        <div class="card-body"><div class="card-desc">Equality, range, ORDER BY on most column types → <strong style="color:var(--btree)">B-Tree</strong></div></div>
+      </div>
+      <div class="card" style="--c:var(--gin);--cg:var(--gin-glow)" onclick="detail('dt_jsonb')">
+        <div class="card-head"><span class="card-icon">❓</span><span class="card-title" style="color:var(--gin)">JSONB / arrays / full-text?</span></div>
+        <div class="card-body"><div class="card-desc">Containment or element search → <strong style="color:var(--gin)">GIN</strong></div></div>
+      </div>
+      <div class="card" style="--c:var(--gist);--cg:var(--gist-glow)" onclick="detail('dt_range')">
+        <div class="card-head"><span class="card-icon">❓</span><span class="card-title" style="color:var(--gist)">Range overlap / geometry?</span></div>
+        <div class="card-body"><div class="card-desc">Overlap, containment, nearest-neighbor → <strong style="color:var(--gist)">GiST</strong></div></div>
+      </div>
+      <div class="card" style="--c:var(--brin);--cg:var(--brin-glow)" onclick="detail('dt_timeseries')">
+        <div class="card-head"><span class="card-icon">❓</span><span class="card-title" style="color:var(--brin)">Append-only time-series?</span></div>
+        <div class="card-body"><div class="card-desc">High correlation, huge table → <strong style="color:var(--brin)">BRIN</strong></div></div>
+      </div>
+      <div class="card" style="--c:var(--case);--cg:var(--case-glow)" onclick="detail('dt_case')">
+        <div class="card-head"><span class="card-icon">❓</span><span class="card-title" style="color:var(--case)">Case-insensitive search?</span></div>
+        <div class="card-body"><div class="card-desc">lower(col) index or citext type → <strong style="color:var(--case)">Expression/citext</strong></div></div>
+      </div>
+      <div class="card" style="--c:#94a3b8;--cg:rgba(148,163,184,0.15)" onclick="detail('dt_like')">
+        <div class="card-head"><span class="card-icon">❓</span><span class="card-title" style="color:#94a3b8">LIKE '%middle%' search?</span></div>
+        <div class="card-body"><div class="card-desc">Trigram GIN index via pg_trgm extension</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════ -->
+  <!-- DETAIL PANEL -->
+  <!-- ═══════════════════════════════════════════════ -->
+  <div class="detail empty" id="detail-panel">
+    <div class="detail-title" id="detail-title">← Click any component above</div>
+    <div class="detail-body" id="detail-body">Select any highlighted element to see a deep explanation with real examples.</div>
+  </div>
+
+</div><!-- /wrap -->
+
+<script>
+// ── TAB SWITCHING ──
+const tabMap = { btree:0, gin:1, gist:2, brin:3, hash:4, case:5, compare:6 };
+function switchTab(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  document.querySelectorAll('.tab')[tabMap[name]].classList.add('active');
+  clearDetail();
+}
+
+// ── BTREE DETAIL HELPER ──
+function showBTreeDetail(type) {
+  const map = {
+    root: 'btree_root', internal: 'btree_internal',
+    leaf_normal: 'btree_leaf', leaf_active: 'btree_leaf_active'
+  };
+  detail(map[type] || 'btree_root');
+}
+
+// ── SEARCH SIMULATOR ──
+function runSim() {
+  const email = document.getElementById('sim-email').value.trim() || 'Alice@Example.com';
+  const method = document.getElementById('sim-method').value;
+  const result = document.getElementById('sim-result');
+  const lc = email.toLowerCase();
+
+  const results = {
+    eq: {
+      cls: email === email.toLowerCase() || email === email.toUpperCase() ? 'fast' : 'slow',
+      html: email === email.toLowerCase()
+        ? `<strong>⚡ FAST — Index Scan</strong><br>Query: <code>WHERE email = '${email}'</code><br>The stored value matches exactly → B-Tree finds it in 3-4 page reads.<br><br>EXPLAIN: <code>Index Scan using idx_email on users (cost=0.43..8.45 rows=1)</code>`
+        : `<strong>⚠️ INCONSISTENT — depends on stored case</strong><br>Query: <code>WHERE email = '${email}'</code><br>Index IS used, but only finds rows where email is stored EXACTLY as '${email}'.<br>If stored as '${lc}' → returns nothing! This causes inconsistent results across users.`
+    },
+    lower: {
+      cls: 'slow',
+      html: `<strong>🐢 SLOW — Sequential Scan</strong><br>Query: <code>WHERE lower(email) = '${lc}'</code><br>lower() is applied to the column → plain email index CANNOT be used.<br>Postgres scans every row and calls lower() on each one.<br><br>EXPLAIN: <code>Seq Scan on users (cost=0.00..25400.00 rows=1)</code><br><br>Fix: <code>CREATE INDEX ON users (lower(email));</code>`
+    },
+    ilike: {
+      cls: 'slow',
+      html: `<strong>🐢 SLOW — Sequential Scan</strong><br>Query: <code>WHERE email ILIKE '${email}'</code><br>ILIKE is case-insensitive LIKE. Without trigram index → full table scan.<br><br>Fix: <code>CREATE EXTENSION pg_trgm;<br>CREATE INDEX ON users USING GIN (email gin_trgm_ops);</code>`
+    },
+    lower_idx: {
+      cls: 'fix',
+      html: `<strong>⚡ FAST — Expression Index Scan</strong><br>Query: <code>WHERE lower(email) = '${lc}'</code><br>With index: <code>CREATE INDEX ON users (lower(email))</code><br><br>The index stores lower(email) for every row. Query applies lower() once to the constant '${email}' → '${lc}', then does a B-Tree lookup.<br><br>EXPLAIN: <code>Index Scan using idx_email_lower on users<br>Index Cond: (lower(email) = '${lc}')</code>`
+    },
+    citext: {
+      cls: 'fix',
+      html: `<strong>⚡ FAST — citext Index Scan (any case)</strong><br>With <code>email citext</code> and plain B-Tree index:<br><br>All of these are equivalent and use the index:<br><code>WHERE email = '${email}'</code> ✓<br><code>WHERE email = '${lc}'</code> ✓<br><code>WHERE email = '${email.toUpperCase()}'</code> ✓<br><br>citext stores original case but compares as lowercase. Zero application-level lower() calls needed.`
+    }
+  };
+
+  const r = results[method];
+  result.className = 'sim-result ' + r.cls;
+  result.innerHTML = r.html;
+}
+
+// ── DETAIL DATA ──
+const D = {
+  // ── B-TREE ──
+  btree_root: { c:'#2563eb', icon:'🌳', title:'Root Node — Entry Point of Every Search',
+    body:`The root is the single top-level node of the B-Tree. Every query starts here — no exceptions.<br><br>
+    <strong>What it contains:</strong> Pivot keys that divide the key space into ranges. The root <code>[50|100]</code> divides the space into: keys &lt;50 (go left), 50–100 (go middle), &gt;100 (go right).<br><br>
+    <strong>The root is always cached:</strong> In a busy database, the root page of a hot index is almost always in <code>shared_buffers</code>. It's accessed on every single query for that index, so it stays cached permanently. This makes the first level of the tree essentially free.<br><br>
+    <strong>Root splits:</strong> When the root becomes full, it splits into two nodes and a new root is created above them — increasing the tree height by 1. This is rare (height grows as log₅₀₀(n)).
+    <div style="margin-top:12px"><span class="pill pill-ok">Always cached in shared_buffers</span><span class="pill pill-info">Height grows as O(log n)</span></div>` },
+
+  btree_internal: { c:'#2563eb', icon:'🔀', title:'Internal Nodes — Routing, Not Data',
+    body:`Internal (branch) nodes contain pivot keys that route your search down the tree. They do NOT contain ctids — they only point to child nodes.<br><br>
+    <strong>Node capacity:</strong> Each internal page (8KB) can hold approximately 500 child pointers (for a bigint key). This high fanout is why trees stay shallow — 500² = 250,000 leaves reachable in just 2 hops from the root.<br><br>
+    <strong>How routing works:</strong> For a key search, Postgres does a binary search within the internal node to find which child to descend into. This is O(log k) where k is keys per node — very fast.<br><br>
+    <strong>Fill factor:</strong> Internal nodes are kept about 70% full by default so they can absorb new keys without immediate splits. Leaf nodes have a separate fill factor setting.
+    <div style="margin-top:12px"><span class="pill pill-info">~500 child pointers per internal page</span><span class="pill pill-ok">Binary search within each node</span></div>` },
+
+  btree_leaf: { c:'#2563eb', icon:'🍃', title:'Leaf Nodes — Where Your Data Pointers Live',
+    body:`Leaf nodes are the bottom level of the B-Tree. Each entry contains a <strong>(key_value, ctid)</strong> pair — the ctid being the physical address of the matching heap row.<br><br>
+    <strong>Linked list:</strong> All leaf nodes are connected in a doubly-linked list in key order. This is what makes range scans efficient — after finding the starting leaf, Postgres just follows the linked list forward, reading entries sequentially without going back up the tree.<br><br>
+    <strong>Leaf capacity:</strong> A leaf page (8KB) holds approximately 300 entries for a bigint key. The exact number depends on key size — wider keys mean fewer entries per page.<br><br>
+    <strong>Dead index entries:</strong> When a heap tuple is deleted or updated, its index entry in the leaf node is not immediately removed. The entry is marked as dead and cleaned up by VACUUM. Dead entries waste space and can cause index bloat.
+    <div style="margin-top:12px"><span class="pill pill-ok">Doubly linked → fast range scans</span><span class="pill pill-warn">Dead entries accumulate until VACUUM</span></div>` },
+
+  btree_leaf_active: { c:'#f59e0b', icon:'🎯', title:'Highlighted Leaf — Found id=73!',
+    body:`This leaf contains the entry <strong>73 → (41, 7)</strong> — exactly what the query <code>WHERE id = 73</code> is looking for.<br><br>
+    <strong>What happens next:</strong>
+    <ol style="padding-left:18px;margin-top:8px">
+      <li style="margin-bottom:6px">ctid = (41, 7) extracted from the leaf</li>
+      <li style="margin-bottom:6px">Postgres reads page 41 from the heap file (or shared_buffers if cached)</li>
+      <li style="margin-bottom:6px">Reads item pointer slot 7 on page 41 → gets the byte offset of the tuple</li>
+      <li style="margin-bottom:6px">Reads the tuple at that offset</li>
+      <li>Checks visibility (xmin/xmax) — if visible, returns the row</li>
+    </ol>
+    <br><strong>Index-Only Scan shortcut:</strong> If all SELECTed columns are in the index (via INCLUDE or being key columns), AND the visibility map says the page is all-visible, step 2–5 can be skipped entirely.
+    <div style="margin-top:12px"><span class="pill pill-ok">Total: 3-4 page reads regardless of table size</span></div>` },
+
+  btree_supports: { c:'#2563eb', icon:'✅', title:'What B-Tree Indexes Support',
+    body:`B-Tree supports any operator that implies a total ordering of values:<br><br>
+    <ul>
+      <li><strong>=</strong> — equality: <code>WHERE id = 42</code></li>
+      <li><strong>&lt;, &gt;, &lt;=, &gt;=</strong> — comparisons: <code>WHERE price &gt; 100</code></li>
+      <li><strong>BETWEEN</strong> — range: <code>WHERE age BETWEEN 20 AND 30</code></li>
+      <li><strong>IN</strong> — list: <code>WHERE id IN (1, 2, 3)</code> — uses index for each value</li>
+      <li><strong>IS NULL / IS NOT NULL</strong> — NULLs are indexed (stored at one end)</li>
+      <li><strong>ORDER BY</strong> — if index matches order, no sort needed (merge scan)</li>
+      <li><strong>LIKE 'prefix%'</strong> — only if the pattern is a fixed prefix with no leading wildcard</li>
+    </ul>
+    <br><strong>LIKE 'prefix%' requirement:</strong> The text column must use a collation that orders bytes predictably. With <code>C</code> or <code>POSIX</code> locale, this works. With <code>en_US.UTF-8</code>, you may need <code>text_pattern_ops</code>: <code>CREATE INDEX ON users (email text_pattern_ops)</code>.
+    <div style="margin-top:12px"><span class="pill pill-ok">Most common operations covered</span></div>` },
+
+  btree_notsupp: { c:'#ef4444', icon:'❌', title:'What B-Tree Cannot Do',
+    body:`B-Tree requires a total ordering — a way to say value A comes "before" value B. Some data types and operations don't fit this model:<br><br>
+    <ul>
+      <li><strong>LIKE '%suffix' or LIKE '%middle%'</strong> — no fixed prefix to seek to. Use <code>pg_trgm</code> GIN index instead</li>
+      <li><strong>Full-text search</strong> — documents don't have a total order by relevance. Use GIN with <code>tsvector</code></li>
+      <li><strong>Array containment @&gt;</strong> — no ordering between arrays. Use GIN</li>
+      <li><strong>JSONB containment</strong> — same reason. Use GIN</li>
+      <li><strong>Geometric/spatial operations</strong> — 2D shapes need 2D index structures. Use GiST</li>
+      <li><strong>Range overlap &amp;&amp;</strong> — requires spatial understanding. Use GiST</li>
+    </ul>
+    <div style="margin-top:12px"><span class="pill pill-err">Using these on B-Tree = Sequential Scan</span></div>` },
+
+  btree_partial: { c:'#2563eb', icon:'🔪', title:'Partial Index — Only Index What You Query',
+    body:`A partial index includes a <code>WHERE</code> clause that limits which rows are indexed. The result is a much smaller, faster index.<br><br>
+    <strong>Example:</strong>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(37,99,235,0.08);border-radius:4px;line-height:1.8">-- 10M users, only 50K active<br>CREATE INDEX idx_active_email ON users (email)<br>WHERE status = 'active';<br><br>-- Planner uses this ONLY when query has compatible WHERE:<br>SELECT * FROM users WHERE email = 'a@b.com' AND status = 'active'; -- ✓<br>SELECT * FROM users WHERE email = 'a@b.com'; -- ✗ (missing status filter)</code>
+    <strong>Best use cases:</strong> soft deletes (<code>WHERE deleted_at IS NULL</code>), unprocessed jobs (<code>WHERE processed = false</code>), active subscriptions. If the indexed subset is 1% of the table, your index is 99% smaller.
+    <div style="margin-top:12px"><span class="pill pill-ok">Much smaller index = fits in cache</span><span class="pill pill-warn">Query WHERE must match index WHERE</span></div>` },
+
+  btree_covering: { c:'#2563eb', icon:'🛡️', title:'Covering Index (INCLUDE) — Zero Heap Fetches',
+    body:`An index-only scan answers a query entirely from the index — no heap page reads at all. This is the fastest possible read path.<br><br>
+    <strong>Requirements:</strong> All columns in SELECT and WHERE must be in the index. Use INCLUDE to add non-key columns to leaf pages:<br>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(37,99,235,0.08);border-radius:4px;line-height:1.8">-- Without covering index: fetches heap for total_amount<br>CREATE INDEX ON orders (customer_id);<br>SELECT customer_id, total_amount FROM orders WHERE customer_id = 42;<br>-- → Index Scan + heap fetch per row<br><br>-- With covering index: no heap fetch needed<br>CREATE INDEX ON orders (customer_id) INCLUDE (total_amount);<br>-- → Index Only Scan ⚡</code>
+    <strong>INCLUDE vs key columns:</strong> INCLUDE columns are stored only in leaf pages, not used for ordering. This keeps internal nodes compact and the tree shallow.
+    <div style="margin-top:12px"><span class="pill pill-ok">Fastest possible read path</span><span class="pill pill-info">Also requires visibility map to be set</span></div>` },
+
+  btree_composite: { c:'#2563eb', icon:'🎯', title:'Composite Index — Column Order is Critical',
+    body:`A composite index on <code>(a, b)</code> is like a phone book sorted first by last name, then by first name. You can look up by last name alone, or by last name + first name. But you cannot efficiently look up by first name alone.<br><br>
+    <strong>The leftmost prefix rule:</strong>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(37,99,235,0.08);border-radius:4px;line-height:1.8">CREATE INDEX ON orders (customer_id, created_at);<br><br>WHERE customer_id = 42                          -- ✓ uses index<br>WHERE customer_id = 42 AND created_at > '2024'   -- ✓ uses both columns<br>WHERE created_at > '2024'                        -- ✗ can't skip customer_id</code>
+    <strong>Column ordering rule:</strong> Put equality columns before range columns. <code>(customer_id, created_at)</code> is better than <code>(created_at, customer_id)</code> for queries that filter on both, because the equality filter on customer_id narrows the range scan on created_at dramatically.
+    <div style="margin-top:12px"><span class="pill pill-warn">Equality columns first, range columns last</span></div>` },
+
+  btree_expr: { c:'#2563eb', icon:'ƒ', title:'Expression Index — Index a Computed Value',
+    body:`An expression index stores the result of a function applied to column values. The planner uses it only when the query contains the exact same expression.<br><br>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(37,99,235,0.08);border-radius:4px;line-height:1.8">-- Index on the expression:<br>CREATE INDEX ON users (lower(email));<br><br>-- Uses the index (expression matches):<br>WHERE lower(email) = 'alice@example.com'  -- ✓<br><br>-- Does NOT use it:<br>WHERE email = 'Alice@Example.com'         -- ✗<br>WHERE upper(email) = 'ALICE@EXAMPLE.COM'  -- ✗ (different function)</code>
+    <strong>Function must be IMMUTABLE:</strong> The function must always return the same result for the same input. <code>lower()</code> ✓, <code>now()</code> ✗, <code>random()</code> ✗.
+    <div style="margin-top:12px"><span class="pill pill-warn">Query expression must exactly match index expression</span><span class="pill pill-ok">Function must be IMMUTABLE</span></div>` },
+
+  // ── GIN ──
+  gin_key_type: { c:'#059669', icon:'🔑', title:'GIN Key — "type" Field Extracted from JSONB',
+    body:`Each unique value encountered in the indexed JSONB field becomes a key in the GIN index. For the "type" field, the values "click", "purchase", and "signup" each get their own posting list.<br><br>
+    <strong>How keys are generated:</strong> PostgreSQL's GIN infrastructure calls a type-specific function (<code>gin_extract_value</code>) on each row's JSONB to extract all indexable elements. For JSONB, this extracts every key-value pair at every nesting level.<br><br>
+    <strong>Key storage:</strong> Keys are stored in a B-Tree within the GIN index (yes, GIN has an internal B-Tree for its keys!). This lets it efficiently find the posting list for any given key.
+    <div style="margin-top:12px"><span class="pill pill-info">One key per unique JSONB value across all rows</span></div>` },
+
+  gin_key_page: { c:'#059669', icon:'📄', title:'GIN Key — "page" Field Creates Multiple Entries',
+    body:`Every distinct value of every JSONB field creates a separate key. The "page" field has values "home", "checkout", and "pricing" — three separate GIN keys, each with its own posting list.<br><br>
+    <strong>Why this matters for write performance:</strong> A JSONB document with 50 distinct key-value pairs creates 50 GIN index entries per row insertion. This is why GIN writes are significantly slower than B-Tree writes.<br><br>
+    <strong>Nested JSONB:</strong> GIN indexes all levels of nesting by default. A deeply nested document with 200 values creates 200 index entries.
+    <div style="margin-top:12px"><span class="pill pill-warn">50 JSONB keys = 50 index entries per row</span></div>` },
+
+  gin_key_uid: { c:'#059669', icon:'👤', title:'GIN Key — user_id Values in the Posting List',
+    body:`For high-cardinality fields like <code>user_id</code>, each unique value gets its own posting list containing only 1–2 rows. This can make GIN indexes very large and the posting list intersection less efficient than a B-Tree lookup would be.<br><br>
+    <strong>Best practice:</strong> Don't put high-cardinality scalar values like user_id in a GIN index if you're querying on them directly. Use a regular B-Tree index for those. Reserve GIN for the multi-valued attributes (JSONB containment, arrays, full-text) where B-Tree fundamentally can't help.
+    <div style="margin-top:12px"><span class="pill pill-warn">High-cardinality scalars belong in B-Tree, not GIN</span></div>` },
+
+  gin_usecases: { c:'#059669', icon:'🎯', title:'When to Use GIN — Real Use Cases',
+    body:`<strong>1. JSONB containment queries:</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(5,150,105,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE INDEX ON events USING GIN (data);<br>WHERE data @> '{"type": "click", "country": "US"}'</code>
+    <strong>2. Array containment:</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(5,150,105,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE INDEX ON posts USING GIN (tags);<br>WHERE tags @> ARRAY['postgres', 'performance']</code>
+    <strong>3. Full-text search:</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(5,150,105,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE INDEX ON articles USING GIN (to_tsvector('english', body));<br>WHERE to_tsvector('english', body) @@ to_tsquery('postgres & index')</code>
+    <strong>4. Fuzzy LIKE search:</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(5,150,105,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE INDEX ON users USING GIN (name gin_trgm_ops);<br>WHERE name ILIKE '%alice%'</code>
+    <div style="margin-top:12px"><span class="pill pill-ok">Read-heavy workloads benefit most</span></div>` },
+
+  gin_pending: { c:'#059669', icon:'📋', title:'Pending List — Why GIN Writes Are Batched',
+    body:`Writing to GIN is expensive because one row change can create/update dozens of index entries. PostgreSQL solves this with a pending list:<br><br>
+    <strong>How it works:</strong>
+    <ul>
+      <li>New writes go to a small <strong>pending list</strong> (a heap table) — very fast</li>
+      <li>Queries check BOTH the main GIN structure AND the pending list</li>
+      <li>When pending list grows large (or VACUUM runs), a "cleanup" merges it into the main structure</li>
+    </ul>
+    <br><strong>The performance trap:</strong> If a query runs while the pending list is large, it must scan the entire pending list + do the main index lookup. This causes occasional slow queries.<br><br>
+    <strong>Fix:</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(5,150,105,0.08);border-radius:4px;font-size:11px">-- Force pending list merge:<br>SELECT gin_clean_pending_list('idx_name'::regclass);<br><br>-- Or disable fastupdate for consistent latency:<br>CREATE INDEX ... WITH (fastupdate = off);</code>
+    <div style="margin-top:12px"><span class="pill pill-warn">Large pending list = occasional slow queries</span><span class="pill pill-info">Monitor with pg_stat_user_indexes</span></div>` },
+
+  gin_operators: { c:'#059669', icon:'🔧', title:'GIN Operators — Complete Reference',
+    body:`<strong>JSONB operators:</strong>
+    <ul>
+      <li><code>@&gt;</code> — left contains right: <code>data @&gt; '{"type":"click"}'</code></li>
+      <li><code>&lt;@</code> — left is contained by right</li>
+      <li><code>?</code> — key exists: <code>data ? 'amount'</code></li>
+      <li><code>?&amp;</code> — all keys exist: <code>data ?&amp; ARRAY['type','user_id']</code></li>
+      <li><code>?|</code> — any key exists: <code>data ?| ARRAY['amount','discount']</code></li>
+    </ul>
+    <br><strong>Array operators:</strong>
+    <ul>
+      <li><code>@&gt;</code> — array contains elements: <code>tags @&gt; ARRAY['pg']</code></li>
+      <li><code>&amp;&amp;</code> — arrays overlap: <code>tags &amp;&amp; ARRAY['pg','db']</code></li>
+    </ul>
+    <br><strong>Full-text operators:</strong>
+    <ul>
+      <li><code>@@</code> — tsvector matches tsquery: <code>body_tsv @@ to_tsquery('postgres')</code></li>
+    </ul>
+    <div style="margin-top:12px"><span class="pill pill-info">All these operators have GIN support built-in</span></div>` },
+
+  gin_trgm: { c:'#059669', icon:'🔍', title:'Trigram Search — LIKE "%middle%" With an Index',
+    body:`The <code>pg_trgm</code> extension breaks text into overlapping 3-character grams (trigrams) and indexes them in GIN.<br><br>
+    <strong>How it works:</strong> The string "postgres" becomes trigrams: "pos", "ost", "stg", "tgr", "gre", "res". A LIKE '%gre%' query looks up "gre" in the GIN index — instant.<br><br>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(5,150,105,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE EXTENSION pg_trgm;<br>CREATE INDEX ON products USING GIN (name gin_trgm_ops);<br><br>-- All of these now use the index:<br>WHERE name LIKE '%postgres%'      -- ✓<br>WHERE name ILIKE '%POSTGRES%'     -- ✓ (case-insensitive)<br>WHERE name ~ 'post.*gres'         -- ✓ (regex)<br>WHERE similarity(name,'postgres') &gt; 0.3  -- ✓ fuzzy match</code>
+    <strong>Minimum length:</strong> Trigrams need at least 3 characters to work. Very short patterns (&lt;3 chars) fall back to seq scan.
+    <div style="margin-top:12px"><span class="pill pill-ok">Only way to index LIKE '%middle%' patterns</span></div>` },
+
+  // ── GiST ──
+  gist_usecases: { c:'#d97706', icon:'🎯', title:'When to Use GiST — Real Use Cases',
+    body:`<strong>1. Range type overlap (bookings, scheduling):</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(217,119,6,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE INDEX ON bookings USING GIST (during);<br>WHERE during &amp;&amp; '[2024-03-10, 2024-03-15)'::tsrange</code>
+    <strong>2. Exclusion constraints (prevent overlaps):</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(217,119,6,0.08);border-radius:4px;font-size:11px;line-height:1.8">EXCLUDE USING GIST (room_id WITH =, during WITH &amp;&amp;)</code>
+    <strong>3. PostGIS nearest neighbor:</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(217,119,6,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE INDEX ON locations USING GIST (geom);<br>ORDER BY geom &lt;-&gt; ST_Point(-73.98, 40.74) LIMIT 10</code>
+    <strong>4. Full-text (high-update tables):</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(217,119,6,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE INDEX ON articles USING GIST (to_tsvector('english', body));<br>-- Better write performance than GIN for frequently-changed docs</code>` },
+
+  gist_lossy: { c:'#d97706', icon:'🔍', title:'Lossy Storage — What "Recheck" Means',
+    body:`GiST internal nodes store <strong>bounding box approximations</strong>, not exact values. A bounding box for a subtree might say "all geometries in this subtree fit within this rectangle" — but individual items within the subtree might not actually match your query.<br><br>
+    <strong>This causes false positives:</strong> GiST returns candidate rows that might not match, and Postgres rechecks each one against the actual heap tuple. You'll see this in EXPLAIN as:<br>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(217,119,6,0.08);border-radius:4px;font-size:11px">Index Scan using idx_gist on bookings<br>  Index Cond: (during &amp;&amp; '[Mar-10,Mar-15)'::tsrange)<br>  Rows Removed by Index Recheck: 3   ← false positives</code>
+    <strong>In practice:</strong> The number of false positives is small for well-designed data, so recheck cost is minimal. GiST is still orders of magnitude faster than a sequential scan.
+    <div style="margin-top:12px"><span class="pill pill-warn">Recheck = extra heap reads for false positives</span><span class="pill pill-ok">Usually negligible in practice</span></div>` },
+
+  gist_excl: { c:'#d97706', icon:'🚫', title:'Exclusion Constraints — Database-Enforced No-Overlap',
+    body:`An exclusion constraint is like a UNIQUE constraint, but instead of requiring equality, it prevents any two rows where the specified operator returns true between them.<br><br>
+    <strong>Hotel booking example:</strong>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(217,119,6,0.08);border-radius:4px;font-size:11px;line-height:1.8">ALTER TABLE bookings ADD CONSTRAINT no_double_booking<br>EXCLUDE USING GIST (<br>  room_id WITH =,    -- same room<br>  during WITH &amp;&amp;    -- AND overlapping dates<br>);<br><br>-- This INSERT will FAIL with a constraint violation:<br>INSERT INTO bookings VALUES (101, '[Mar-10, Mar-15)');<br>-- if room 101 already has a booking overlapping those dates</code>
+    <strong>Why this requires GiST:</strong> UNIQUE constraints use B-Tree which only supports =. Exclusion constraints need custom operators like &amp;&amp; (overlap) which GiST handles natively. This is one of PostgreSQL's most powerful and underused features.
+    <div style="margin-top:12px"><span class="pill pill-ok">Prevents double-bookings at database level</span><span class="pill pill-info">No application-level locking needed</span></div>` },
+
+  gist_vs_gin: { c:'#d97706', icon:'⚖️', title:'GiST vs GIN — Choosing for Full-Text Search',
+    body:`Both support full-text search with <code>tsvector</code>. The choice depends on your update frequency:<br><br>
+    <strong>Use GIN when:</strong>
+    <ul>
+      <li>Documents are inserted once and rarely updated (news articles, product descriptions)</li>
+      <li>Query speed is the priority</li>
+      <li>You can tolerate slower index builds</li>
+    </ul>
+    <strong>Use GiST when:</strong>
+    <ul>
+      <li>Documents are frequently updated (wiki pages, live content)</li>
+      <li>Write latency matters more than read speed</li>
+      <li>Index build time needs to be fast</li>
+    </ul>
+    <br>
+    <strong>Rule of thumb:</strong> GIN queries are typically 2–10x faster than GiST. Start with GIN unless write performance becomes a bottleneck.
+    <div style="margin-top:12px"><span class="pill pill-ok">GIN: faster reads</span><span class="pill pill-warn">GiST: faster writes, smaller index</span></div>` },
+
+  gist_booking_a: { c:'#d97706', icon:'📅', title:'Room 101 — Alice\'s Booking',
+    body:`This booking occupies Room 101 from March 1 to March 9. It's stored as a <code>tsrange</code> value: <code>[2024-03-01, 2024-03-09)</code>.<br><br>
+    The GiST index on <code>during</code> allows instant overlap checking. When a new booking tries to reserve Room 101, Postgres checks: does any existing <code>during</code> value overlap with the new range using the <code>&amp;&amp;</code> operator? GiST makes this a tree search, not a full table scan.` },
+
+  gist_booking_b: { c:'#d97706', icon:'📅', title:'Room 101 — Bob\'s Booking',
+    body:`Bob's booking follows Alice's. Because there's a gap between Alice's checkout and Bob's checkin, no overlap — this INSERT succeeds.<br><br>
+    The exclusion constraint checks: does any row have <code>room_id = 101 AND during &amp;&amp; Bob's range</code>? Alice's range doesn't overlap Bob's, so the constraint passes.` },
+
+  gist_booking_overlap: { c:'#ef4444', icon:'❌', title:'Conflict! — Overlapping Booking Rejected',
+    body:`This booking (dashed red border) tries to reserve Room 101 during dates that overlap Bob's existing booking. The exclusion constraint catches this and rejects the INSERT with:<br><br>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(239,68,68,0.08);border-radius:4px;font-size:11px">ERROR: conflicting key value violates exclusion constraint "no_double_booking"<br>DETAIL: Key (room_id, during)=(101, [2024-03-17,2024-03-22)) conflicts<br>with existing key (room_id, during)=(101, [2024-03-12,2024-03-20)).</code>
+    This is the power of GiST exclusion constraints — the database itself prevents the double-booking, no application-level locking or transaction management needed.
+    <div style="margin-top:12px"><span class="pill pill-err">INSERT rejected at constraint level</span></div>` },
+
+  gist_booking_c: { c:'#059669', icon:'✅', title:'Room 102 — No Conflicts',
+    body:`Room 102 has two bookings that don't overlap with each other. The exclusion constraint only prevents overlapping bookings for the SAME room — different rooms can have overlapping dates freely.<br><br>
+    This is why the constraint is: <code>EXCLUDE USING GIST (room_id WITH =, during WITH &amp;&amp;)</code> — the <code>room_id WITH =</code> part means "only check overlap within the same room_id."` },
+
+  // ── BRIN ──
+  brin_usecases: { c:'#7c3aed', icon:'🎯', title:'When to Use BRIN — Perfect Scenarios',
+    body:`BRIN shines in very specific situations where data is physically ordered:<br><br>
+    <strong>1. IoT/sensor time-series:</strong> Devices append readings with current timestamp → rows are naturally in time order. BRIN on <code>recorded_at</code> → microscopic index, massive pruning.<br><br>
+    <strong>2. Log tables:</strong> Application logs inserted in time order. BRIN on <code>log_time</code> makes range queries instant.<br><br>
+    <strong>3. Sequential ID columns:</strong> If rows are inserted in SERIAL/BIGSERIAL order and never updated, BRIN on the ID column works well.<br><br>
+    <strong>4. Partitioned tables:</strong> Each partition is often naturally ordered. BRIN within partitions is extremely effective.<br><br>
+    <strong>When NOT to use BRIN:</strong>
+    <ul>
+      <li>Tables with random inserts (correlation ≈ 0)</li>
+      <li>Frequently updated tables (updates break physical ordering)</li>
+      <li>High-selectivity queries (BRIN only prunes page ranges, never as precise as B-Tree)</li>
+    </ul>
+    <div style="margin-top:12px"><span class="pill pill-ok">Best for append-only, time-ordered data</span></div>` },
+
+  brin_correlation: { c:'#7c3aed', icon:'📊', title:'Correlation — The Critical Check Before Using BRIN',
+    body:`Before creating a BRIN index, always check the correlation of the column:<br><br>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(124,58,237,0.08);border-radius:4px;font-size:11px;line-height:1.8">SELECT attname, correlation<br>FROM pg_stats<br>WHERE tablename = 'sensor_readings'<br>AND attname = 'recorded_at';<br><br>-- attname      | correlation<br>-- -------------+------------<br>-- recorded_at  |    0.9987   ← excellent for BRIN<br><br>-- Another column:<br>-- user_id       |    0.0234   ← terrible for BRIN, use B-Tree</code>
+    <strong>Correlation values:</strong>
+    <ul>
+      <li><strong>0.95 – 1.0:</strong> Excellent. BRIN is highly effective.</li>
+      <li><strong>0.7 – 0.95:</strong> Good. BRIN still useful.</li>
+      <li><strong>0.3 – 0.7:</strong> Poor. Consider B-Tree instead.</li>
+      <li><strong>0.0 – 0.3:</strong> Useless. Use B-Tree.</li>
+    </ul>
+    <div style="margin-top:12px"><span class="pill pill-err">Always check correlation before creating BRIN</span></div>` },
+
+  brin_range_skip: { c:'#7c3aed', icon:'⏭️', title:'Skipped Range — BRIN Eliminates Entire Page Groups',
+    body:`The grayed-out ranges are completely skipped. The BRIN index says: "this range of 128 pages has max date of Jun 1" — since the query asks for data after Jul 1, these pages cannot possibly contain matching rows.<br><br>
+    <strong>The math:</strong> Each skipped range = 128 pages × 8KB = 1MB of I/O saved. Skipping 4 ranges = 4MB of data never read from disk.<br><br>
+    <strong>How the skip works:</strong> Postgres reads the BRIN index entry for each page range: <code>(min_date, max_date)</code>. If <code>max_date &lt; query_date</code>, the entire range is skipped. No page reads, no heap fetches, nothing.
+    <div style="margin-top:12px"><span class="pill pill-ok">O(1) skip per range — truly instant elimination</span></div>` },
+
+  brin_range_active: { c:'#7c3aed', icon:'📖', title:'Active Range — Pages Actually Read',
+    body:`These ranges are read because their date range overlaps with the query predicate (<code>recorded_at > 'Jul 1'</code>). The BRIN index can tell that these pages might contain matching rows, so Postgres reads them.<br><br>
+    <strong>Note:</strong> BRIN doesn't point to specific rows within a page — it just says "this page range might have matches." Postgres still reads the entire page range and applies the WHERE filter on each tuple. This is less precise than a B-Tree index, which would skip to the exact row.<br><br>
+    <strong>The tradeoff:</strong> B-Tree would be more precise (fewer pages read), but the BRIN index is 1000x smaller. For very large tables where most of the data is prunable, BRIN wins handily.
+    <div style="margin-top:12px"><span class="pill pill-info">Still reads entire matching page ranges, not specific rows</span></div>` },
+
+  brin_pages_range: { c:'#7c3aed', icon:'⚙️', title:'pages_per_range — Precision vs Size Tradeoff',
+    body:`The <code>pages_per_range</code> parameter controls how many heap pages each BRIN entry covers:<br><br>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(124,58,237,0.08);border-radius:4px;font-size:11px;line-height:1.8">-- Default: 128 pages per range<br>CREATE INDEX ON events USING BRIN (created_at);<br><br>-- More precise: 32 pages per range (4x more entries)<br>CREATE INDEX ON events USING BRIN (created_at)<br>WITH (pages_per_range = 32);<br><br>-- Less precise: 256 pages per range (half the entries)<br>CREATE INDEX ON events USING BRIN (created_at)<br>WITH (pages_per_range = 256);</code>
+    <strong>Rule of thumb:</strong> Start with the default (128). If queries still read too many pages, decrease. If the index is too large (still tiny vs B-Tree), increase.
+    <div style="margin-top:12px"><span class="pill pill-ok">Smaller pages_per_range = more precise pruning</span><span class="pill pill-warn">But also slightly larger index</span></div>` },
+
+  brin_size: { c:'#7c3aed', icon:'🪶', title:'BRIN Size vs B-Tree Size — Staggering Difference',
+    body:`The size difference between BRIN and B-Tree is one of the most dramatic in all of database engineering:<br><br>
+    <strong>Example: 100 million row table, BIGINT column</strong>
+    <ul>
+      <li><strong>B-Tree index:</strong> ~2.1 GB (one entry per row)</li>
+      <li><strong>BRIN index (default 128 pages/range):</strong> ~48 KB</li>
+      <li><strong>Ratio: 44,000x smaller</strong></li>
+    </ul>
+    <br><strong>Why this matters operationally:</strong>
+    <ul>
+      <li>BRIN fits entirely in shared_buffers — always cached</li>
+      <li>B-Tree for the same column might be larger than your shared_buffers</li>
+      <li>BRIN index build is nearly instant</li>
+      <li>BRIN has minimal impact on INSERT performance</li>
+    </ul>
+    <div style="margin-top:12px"><span class="pill pill-ok">Often 10,000–100,000x smaller than B-Tree</span></div>` },
+
+  // ── HASH ──
+  hash_fn: { c:'#db2777', icon:'#', title:'Hash Function — Key → Bucket Number',
+    body:`A hash function takes any input value and produces a fixed-size integer (the hash). Postgres uses this integer modulo the number of buckets to determine which bucket the entry goes into.<br><br>
+    <strong>Properties of a good hash function:</strong>
+    <ul>
+      <li><strong>Deterministic:</strong> Same input always produces same hash</li>
+      <li><strong>Uniform distribution:</strong> Inputs spread evenly across buckets</li>
+      <li><strong>Fast to compute:</strong> O(1) regardless of input size</li>
+    </ul>
+    <br><strong>Collision handling:</strong> Two different keys can hash to the same bucket (hash collision). PostgreSQL handles this by storing multiple entries per bucket with a linked overflow chain. The lookup then does a linear scan within the bucket to find the exact match.
+    <div style="margin-top:12px"><span class="pill pill-info">O(1) average, O(n) worst case (many collisions)</span></div>` },
+
+  hash_bucket: { c:'#db2777', icon:'🪣', title:'Hash Bucket — Where Entries Are Stored',
+    body:`Entries with the same hash value land in the same bucket. Each bucket is a page (or chain of pages) storing <code>(key, ctid)</code> pairs.<br><br>
+    <strong>Lookup process:</strong>
+    <ol style="padding-left:18px;margin-top:8px">
+      <li style="margin-bottom:6px">Compute hash('alice@example.com') → e.g., 0x4A2F19</li>
+      <li style="margin-bottom:6px">bucket = 0x4A2F19 % num_buckets → bucket 42</li>
+      <li style="margin-bottom:6px">Read bucket 42 page</li>
+      <li style="margin-bottom:6px">Scan entries until exact key match found</li>
+      <li>Return ctid, fetch heap row</li>
+    </ol>
+    <br><strong>Dynamic resizing:</strong> As the table grows and buckets fill up, the hash index splits buckets to maintain performance. This is called "linear hashing."` },
+
+  hash_only_eq: { c:'#db2777', icon:'⚠️', title:'Equality Only — Why Hash Has Such Limited Use',
+    body:`Hash indexes only support the <code>=</code> operator. This is a fundamental limitation of the hash function approach — hashing loses all ordering information.<br><br>
+    <strong>Why hashing can't support ranges:</strong> The values 50, 51, 52, 53 might hash to buckets 7, 3, 99, 2 respectively — completely random order. The hash index has no way to "find all values between 50 and 60" because nearby values are in unrelated buckets.<br><br>
+    <strong>B-Tree can do everything Hash can, plus more:</strong>
+    <ul>
+      <li>B-Tree: =, &lt;, &gt;, ORDER BY, BETWEEN, LIKE 'x%'</li>
+      <li>Hash: = only</li>
+    </ul>
+    This is the primary reason Hash indexes are rarely used in practice.
+    <div style="margin-top:12px"><span class="pill pill-err">= only — B-Tree handles all other operators too</span></div>` },
+
+  hash_vs_btree: { c:'#db2777', icon:'⚖️', title:'Hash O(1) vs B-Tree O(log n) — In Practice',
+    body:`Theoretically, Hash is O(1) and B-Tree is O(log n). But in practice, the difference is negligible because B-Tree height is only 3–4 levels for most real-world tables.<br><br>
+    <strong>The math:</strong>
+    <ul>
+      <li>B-Tree with 100M rows: height = ~4. That's 4 page reads.</li>
+      <li>Hash: 2 page reads (1 for bucket, 1 for heap)</li>
+      <li>Difference: 2 page reads ≈ 0.2ms on SSD</li>
+    </ul>
+    <br><strong>When Hash might win:</strong> Equality lookups on very long string keys (URLs, hashes, long text) where the B-Tree key comparison itself is expensive. The hash function reduces comparison to a bucket lookup + one equality check.<br><br>
+    <strong>In almost all cases:</strong> Use B-Tree. The theoretical advantage of Hash never manifests meaningfully in practice.
+    <div style="margin-top:12px"><span class="pill pill-warn">Difference is sub-millisecond on most workloads</span></div>` },
+
+  hash_when: { c:'#db2777', icon:'🤔', title:'When to Actually Use a Hash Index',
+    body:`Honestly? Almost never. The situations where Hash genuinely outperforms B-Tree are very narrow:<br><br>
+    <strong>Potential valid cases:</strong>
+    <ul>
+      <li>Equality-only lookups on very wide keys (&gt;100 bytes, like long URLs or SHA hashes)</li>
+      <li>You've profiled and confirmed B-Tree lookup is the bottleneck</li>
+      <li>You never need range scans, ORDER BY, or LIKE on this column</li>
+    </ul>
+    <br><strong>Interviewers often ask:</strong> "When would you use a Hash index?" The correct answer is: "Rarely in practice. B-Tree handles equality just as well and supports range operations that Hash cannot. I'd only consider Hash after profiling equality-lookup performance on wide keys and confirming B-Tree is the bottleneck."
+    <div style="margin-top:12px"><span class="pill pill-warn">Default to B-Tree. Consider Hash only after profiling.</span></div>` },
+
+  hash_wal: { c:'#db2777', icon:'📜', title:'Hash Index WAL History — Pre-PG10 Danger',
+    body:`Before PostgreSQL 10, hash indexes were <strong>not WAL-logged</strong>. This meant:<br><br>
+    <ul>
+      <li>Hash indexes were not included in streaming replication</li>
+      <li>After a crash, hash indexes needed to be manually rebuilt (<code>REINDEX</code>)</li>
+      <li>The documentation literally said "not recommended for production use"</li>
+    </ul>
+    <br><strong>PostgreSQL 10 (2017):</strong> Hash indexes became fully WAL-logged and crash-safe. They're now production-safe.<br><br>
+    <strong>Why this matters for interviews:</strong> This is a common question to separate people who actually know PostgreSQL from those who just know general database theory. Knowing that Hash was unsafe before PG10 and is now fixed signals genuine depth.
+    <div style="margin-top:12px"><span class="pill pill-ok">PG10+: fully WAL-logged and crash-safe</span><span class="pill pill-err">Pre-PG10: not crash-safe, avoid</span></div>` },
+
+  // ── CASE SENSITIVITY ──
+  case_problem: { c:'#ef4444', icon:'❌', title:'The Root Cause — Function on Column Blocks Index',
+    body:`The core rule: <strong>if you apply a function to the indexed column in your WHERE clause, the B-Tree index on the raw column cannot be used.</strong><br><br>
+    <strong>Why:</strong> The B-Tree stores the raw <code>email</code> values in sorted order. To answer <code>WHERE lower(email) = 'alice'</code>, Postgres would need to call <code>lower()</code> on every single B-Tree entry and compare. That defeats the purpose of the index entirely — it's equivalent to a full scan.<br><br>
+    <strong>The inconsistency in user experience:</strong>
+    <ul>
+      <li>User searches "alice@example.com" with <code>WHERE email = ?</code> → index used → fast</li>
+      <li>User searches "Alice@Example.com" with <code>WHERE lower(email) = lower(?)</code> → no index → slow</li>
+      <li>Same table, same data, wildly different response times</li>
+    </ul>
+    <div style="margin-top:12px"><span class="pill pill-err">Function on column = index bypass</span></div>` },
+
+  case_fix_expr: { c:'#4ade80', icon:'✅', title:'Fix 1 — Expression Index on lower(email)',
+    body:`Create an index that stores the pre-computed <code>lower(email)</code> value for every row:<br><br>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(74,222,128,0.06);border-radius:4px;font-size:11px;line-height:1.8">CREATE INDEX idx_email_lower ON users (lower(email));<br><br>-- Index stores: ['alice@example.com', 'bob@example.com', 'charlie@mix.com']<br>-- (all lowercase, regardless of how they were stored)<br><br>-- Now the planner matches the expression and uses the index:<br>EXPLAIN SELECT * FROM users WHERE lower(email) = 'alice@example.com';<br>-- Index Scan using idx_email_lower on users<br>--   Index Cond: (lower(email) = 'alice@example.com')</code>
+    <strong>How the query works:</strong> <code>lower('Alice@Example.com')</code> is computed once → <code>'alice@example.com'</code>. Then B-Tree lookup finds it instantly. The function is called on the constant (once) not on the column (per-row).
+    <div style="margin-top:12px"><span class="pill pill-ok">Quick fix, no schema change needed</span><span class="pill pill-warn">Queries must use lower() — discipline required</span></div>` },
+
+  case_fix_citext: { c:'#fbbf24', icon:'✅', title:'Fix 2 — citext Column Type (Most Elegant)',
+    body:`<code>citext</code> (case-insensitive text) is a PostgreSQL extension type that makes a column behave as if it always runs <code>lower()</code> on both sides of comparisons — transparently.<br><br>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(251,191,36,0.06);border-radius:4px;font-size:11px;line-height:1.8">CREATE EXTENSION citext;<br>ALTER TABLE users ALTER COLUMN email TYPE citext;<br>CREATE INDEX ON users (email); -- plain B-Tree works perfectly<br><br>-- All three use the index AND find the same row:<br>SELECT * FROM users WHERE email = 'alice@example.com';   -- ✓<br>SELECT * FROM users WHERE email = 'ALICE@EXAMPLE.COM';   -- ✓<br>SELECT * FROM users WHERE email = 'Alice@Example.com';   -- ✓<br><br>-- UNIQUE constraint also works case-insensitively:<br>ALTER TABLE users ADD CONSTRAINT uq_email UNIQUE (email);<br>-- 'alice@example.com' and 'Alice@Example.com' = same, rejected</code>
+    <strong>Storage:</strong> citext stores the original case for display, but compares as lowercase. Best of both worlds.
+    <div style="margin-top:12px"><span class="pill pill-ok">Most elegant — no application changes needed</span><span class="pill pill-ok">UNIQUE constraint also case-insensitive</span></div>` },
+
+  case_fix_trgm: { c:'#a78bfa', icon:'✅', title:'Fix 3 — pg_trgm for ILIKE and Fuzzy Search',
+    body:`When you need not just case-insensitivity but also partial matching (<code>LIKE '%alice%'</code>), neither citext nor an expression index on lower() is enough. That's where <code>pg_trgm</code> comes in.<br><br>
+    <strong>How trigrams enable ILIKE:</strong> The string "alice" is split into: " al", "ali", "lic", "ice", "ce ". A GIN index stores all these trigrams. <code>ILIKE '%alice%'</code> computes trigrams for "alice" and does a set intersection in the GIN index.<br><br>
+    <strong>Similarity search (bonus):</strong>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(124,58,237,0.08);border-radius:4px;font-size:11px;line-height:1.8">-- Find users whose name is similar to input (typo-tolerant):<br>SELECT name, similarity(name, 'aliice') AS score<br>FROM users<br>WHERE similarity(name, 'aliice') &gt; 0.3<br>ORDER BY score DESC;<br>-- Returns 'alice' even with typo!</code>
+    <div style="margin-top:12px"><span class="pill pill-ok">Only solution for LIKE '%middle%' with an index</span><span class="pill pill-ok">Also enables fuzzy/typo-tolerant search</span></div>` },
+
+  case_planner_ignore: { c:'#0891b2', icon:'🕵️', title:'Why the Planner Ignores the Index',
+    body:`The planner performs a simple rule check: <strong>"Does the index key match the expression being evaluated?"</strong><br><br>
+    For index on <code>email</code> and query on <code>lower(email)</code>:<br>
+    Index key: <code>email</code> → Query expression: <code>lower(email)</code> → <strong>No match</strong> → Can't use this index.<br><br>
+    <strong>The planner cannot "infer" that lower(email) relates to email:</strong> It treats them as completely different expressions. There's no automatic rewriting.<br><br>
+    <strong>How to confirm with EXPLAIN:</strong>
+    <code style="display:block;margin:10px 0;padding:10px;background:rgba(8,145,178,0.08);border-radius:4px;font-size:11px;line-height:1.8">EXPLAIN SELECT * FROM users WHERE lower(email) = 'alice@example.com';<br>-- Seq Scan on users  ← bad!<br>--   Filter: (lower((email)::text) = 'alice@example.com')<br><br>-- After: CREATE INDEX ON users (lower(email));<br>EXPLAIN SELECT * FROM users WHERE lower(email) = 'alice@example.com';<br>-- Index Scan using idx_email_lower  ← good!</code>` },
+
+  case_enforce: { c:'#0891b2', icon:'🛡️', title:'Enforce Consistency — Normalize at Storage',
+    body:`The cleanest long-term solution is ensuring mixed-case data never enters the database in the first place:<br><br>
+    <strong>Option 1: Trigger (automatic normalization):</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(8,145,178,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE OR REPLACE FUNCTION normalize_email() RETURNS TRIGGER AS $$<br>BEGIN<br>  NEW.email = lower(NEW.email);<br>  RETURN NEW;<br>END;<br>$$ LANGUAGE plpgsql;<br><br>CREATE TRIGGER trg_normalize_email<br>BEFORE INSERT OR UPDATE ON users<br>FOR EACH ROW EXECUTE FUNCTION normalize_email();</code>
+    <strong>Option 2: CHECK constraint (enforce, don't normalize):</strong>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(8,145,178,0.08);border-radius:4px;font-size:11px;line-height:1.8">ALTER TABLE users ADD CONSTRAINT email_must_be_lowercase<br>  CHECK (email = lower(email));<br>-- Rejects 'Alice@Example.com' at INSERT time</code>
+    <div style="margin-top:12px"><span class="pill pill-ok">Plain B-Tree index works perfectly with normalized data</span></div>` },
+
+  // ── COMPARISON ──
+  cmp_btree: { c:'#2563eb', icon:'🌳', title:'B-Tree — The Universal Default',
+    body:`Choose B-Tree for almost everything. It handles all standard SQL operations efficiently and is battle-tested across every PostgreSQL version.<br><br>
+    <strong>Default:</strong> <code>CREATE INDEX</code> without USING clause creates a B-Tree.<br><br>
+    <strong>Works on:</strong> Any type with a defined ordering — integers, text, timestamps, UUIDs, enums, and composite types with custom comparison operators.` },
+
+  cmp_gin: { c:'#059669', icon:'🔍', title:'GIN — For Multi-Valued and Document Data',
+    body:`Choose GIN when a single row can contain multiple indexed values — a JSONB document with dozens of keys, an array with many elements, or a text document with many words.<br><br>
+    <strong>Key insight:</strong> GIN inverts the relationship — instead of "row → values", it indexes "value → rows". This makes containment queries (does this row contain X?) extremely fast.` },
+
+  cmp_gist: { c:'#d97706', icon:'📐', title:'GiST — For Spatial and Range Data',
+    body:`Choose GiST when your data lives in a multi-dimensional space — 2D coordinates, time ranges, IP address ranges — where "does A overlap B?" is the core operation.<br><br>
+    <strong>Unique capability:</strong> GiST is the only index type that supports exclusion constraints. If you're building a booking system, calendar, or resource reservation system, GiST's exclusion constraint is invaluable.` },
+
+  cmp_brin: { c:'#7c3aed', icon:'📏', title:'BRIN — For Huge Ordered Tables',
+    body:`Choose BRIN only when: (1) your table is enormous (100M+ rows), (2) the column has high correlation (≥0.9), and (3) you're doing range queries that skip large chunks of data.<br><br>
+    <strong>The BRIN promise:</strong> An index that costs almost nothing — in size, build time, and write overhead — in exchange for being less precise than B-Tree. Great for time-series, terrible for random-access patterns.` },
+
+  cmp_hash: { c:'#db2777', icon:'#️⃣', title:'Hash — Rarely Worth It',
+    body:`In 99% of cases, use B-Tree instead of Hash. The only meaningful advantage Hash has is O(1) equality lookups, but B-Tree's O(log n) with height 3-4 is indistinguishable in practice.<br><br>
+    <strong>If asked in an interview:</strong> Hash is useful for equality-only lookups on very wide key columns where the B-Tree comparison overhead is measurable. Always benchmark before choosing.` },
+
+  dt_general: { c:'#60a5fa', icon:'🌳', title:'General Column Queries → B-Tree',
+    body:`For 95% of index needs, B-Tree is the right choice. Whenever you're doing standard equality, range, or ordering operations on a column — integers, text, timestamps, booleans, UUIDs — create a B-Tree index.<br><br>
+    The question to ask is: "Does my query compare values with =, &lt;, &gt;, ORDER BY, or LIKE 'x%'?" If yes, B-Tree.` },
+
+  dt_jsonb: { c:'#059669', icon:'📄', title:'JSONB / Arrays / Full-Text → GIN',
+    body:`Whenever you're searching inside a multi-valued attribute, GIN is the answer. The key operations are containment (<code>@&gt;</code>), element existence (<code>?</code>), and full-text matching (<code>@@</code>).<br><br>
+    Quick test: if your WHERE clause uses <code>@&gt;</code>, <code>?</code>, <code>?&amp;</code>, <code>?|</code>, or <code>@@</code> — you need GIN.` },
+
+  dt_range: { c:'#d97706', icon:'📐', title:'Range Overlap / Geometry → GiST',
+    body:`When your data represents ranges (time ranges, numeric ranges) or geometric shapes, and you need overlap/containment/nearest-neighbor queries — GiST is the answer.<br><br>
+    Quick test: if your WHERE clause uses <code>&amp;&amp;</code> (overlap), <code>@&gt;</code> on range types, <code>&lt;-&gt;</code> (distance), or you need an exclusion constraint — use GiST.` },
+
+  dt_timeseries: { c:'#7c3aed', icon:'📈', title:'Append-Only Time-Series → BRIN',
+    body:`First check correlation: <code>SELECT correlation FROM pg_stats WHERE tablename='t' AND attname='ts'</code>. If ≥ 0.9, BRIN is worth it. If &lt; 0.7, use B-Tree.<br><br>
+    BRIN is ideal for IoT data, logs, events, audit trails — anything inserted in chronological order where you query by time ranges.` },
+
+  dt_case: { c:'#0891b2', icon:'🔤', title:'Case-Insensitive Search → Expression Index or citext',
+    body:`Two choices:<br><br>
+    <strong>Quick fix:</strong> <code>CREATE INDEX ON users (lower(email))</code> + use <code>WHERE lower(email) = lower(?)</code> in all queries.<br><br>
+    <strong>Better fix:</strong> <code>ALTER COLUMN email TYPE citext</code> + plain <code>CREATE INDEX ON users (email)</code>. Queries work with any case automatically.` },
+
+  dt_like: { c:'#94a3b8', icon:'🔍', title:'LIKE "%middle%" → pg_trgm GIN Index',
+    body:`A leading wildcard in LIKE ('%pattern') cannot use a standard B-Tree index — there's no starting point to seek to. The only solution is trigram indexing:<br><br>
+    <code style="display:block;margin:8px 0;padding:8px;background:rgba(148,163,184,0.08);border-radius:4px;font-size:11px;line-height:1.8">CREATE EXTENSION pg_trgm;<br>CREATE INDEX ON products USING GIN (name gin_trgm_ops);<br>WHERE name ILIKE '%search_term%'   -- ✓ uses GIN now</code>
+    Note: minimum 3 characters needed for trigram lookup to be effective.` },
+};
+
+function detail(key) {
+  const d = D[key];
+  if (!d) return;
+  const panel = document.getElementById('detail-panel');
+  panel.style.setProperty('--dc', d.c);
+  document.getElementById('detail-title').innerHTML = `<span>${d.icon}</span> ${d.title}`;
+  document.getElementById('detail-body').innerHTML = d.body;
+  panel.classList.remove('empty');
+  panel.scrollIntoView({ behavior:'smooth', block:'nearest' });
+
+  // Highlight clicked cards
+  document.querySelectorAll('.card.lit, .case-box.lit').forEach(e => e.classList.remove('lit'));
+  event && event.currentTarget && event.currentTarget.classList.add('lit');
+}
+
+function clearDetail() {
+  const panel = document.getElementById('detail-panel');
+  panel.classList.add('empty');
+  document.getElementById('detail-title').innerHTML = '← Click any component above';
+  document.getElementById('detail-body').innerHTML = 'Select any highlighted element to see a deep explanation with real examples.';
+}
+
+// Run sim on enter
+document.getElementById('sim-email').addEventListener('keydown', e => { if(e.key==='Enter') runSim(); });
+</script>
+</body>
+</html>
