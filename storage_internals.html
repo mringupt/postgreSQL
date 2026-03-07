@@ -1,0 +1,1620 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PostgreSQL Storage Internals</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2235;
+    --surface3: #0f1729;
+    --border: #1e3a5f;
+    --accent: #3b82f6;
+    --cyan: #06b6d4;
+    --green: #10b981;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --purple: #8b5cf6;
+    --pink: #ec4899;
+    --text: #e2e8f0;
+    --muted: #64748b;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Syne', sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    min-height: 100vh;
+  }
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+  .wrapper {
+    position: relative;
+    z-index: 1;
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 24px 80px;
+  }
+  header { text-align: center; margin-bottom: 48px; }
+  .badge {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    color: var(--cyan);
+    border: 1px solid var(--cyan);
+    padding: 4px 14px;
+    border-radius: 2px;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+  }
+  h1 {
+    font-size: clamp(26px, 4vw, 42px);
+    font-weight: 800;
+    letter-spacing: -0.02em;
+    background: linear-gradient(135deg, #e2e8f0 0%, #06b6d4 50%, #10b981 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+    margin-bottom: 10px;
+  }
+  .subtitle { color: var(--muted); font-size: 13px; font-family: var(--mono); }
+  .hint {
+    text-align: center;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 32px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:0.4} 50%{opacity:1} }
+
+  /* ── TABS ── */
+  .tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 28px;
+    flex-wrap: wrap;
+  }
+  .tab {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 8px 18px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.05em;
+  }
+  .tab:hover { border-color: var(--accent); color: var(--text); }
+  .tab.active {
+    border-color: var(--tab-color, var(--accent));
+    color: var(--tab-color, var(--accent));
+    background: var(--surface2);
+    box-shadow: 0 0 12px rgba(59,130,246,0.15);
+  }
+
+  /* ── VIEWS ── */
+  .view { display: none; }
+  .view.active { display: block; }
+
+  /* ── SECTION LABEL ── */
+  .section-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    margin-bottom: 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 4px;
+  }
+  .section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: currentColor;
+    opacity: 0.2;
+  }
+
+  /* ── PAGE DIAGRAM ── */
+  .page-container {
+    background: var(--surface2);
+    border: 2px solid var(--cyan);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(6,182,212,0.1);
+    margin-bottom: 20px;
+  }
+  .page-header-bar {
+    background: linear-gradient(90deg, rgba(6,182,212,0.15), rgba(6,182,212,0.05));
+    border-bottom: 1px solid rgba(6,182,212,0.3);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .page-title {
+    font-family: var(--mono);
+    font-weight: 700;
+    color: var(--cyan);
+    font-size: 13px;
+  }
+  .page-size-badge {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    padding: 3px 10px;
+    border-radius: 3px;
+  }
+
+  .page-region {
+    border-bottom: 1px dashed rgba(255,255,255,0.07);
+    padding: 14px 20px;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .page-region:last-child { border-bottom: none; }
+  .page-region:hover, .page-region.active {
+    background: rgba(255,255,255,0.04);
+  }
+  .page-region.active::before {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 3px;
+    background: var(--region-color, var(--cyan));
+    border-radius: 0 2px 2px 0;
+  }
+  .region-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 6px;
+  }
+  .region-name {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 12px;
+    color: var(--region-color, var(--cyan));
+  }
+  .region-size {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    margin-left: auto;
+  }
+  .region-desc {
+    font-size: 12px;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  /* Visual page bar */
+  .page-visual {
+    display: flex;
+    height: 44px;
+    border-radius: 6px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+    margin-bottom: 20px;
+    cursor: default;
+  }
+  .pv-seg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 600;
+    transition: all 0.3s;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+  }
+  .pv-seg:hover { filter: brightness(1.3); }
+  .pv-seg span { position: relative; z-index: 1; color: rgba(255,255,255,0.9); }
+
+  /* ── TUPLE DIAGRAM ── */
+  .tuple-container {
+    background: var(--surface2);
+    border: 2px solid var(--purple);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 0 40px rgba(139,92,246,0.1);
+    margin-bottom: 20px;
+  }
+  .tuple-header-bar {
+    background: linear-gradient(90deg, rgba(139,92,246,0.15), rgba(139,92,246,0.05));
+    border-bottom: 1px solid rgba(139,92,246,0.3);
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .tuple-title {
+    font-family: var(--mono);
+    font-weight: 700;
+    color: var(--purple);
+    font-size: 13px;
+  }
+
+  .tuple-visual {
+    display: flex;
+    padding: 16px 20px;
+    gap: 3px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+  }
+  .tuple-field {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    min-width: 0;
+  }
+  .tuple-field:hover .tf-box { filter: brightness(1.3); transform: translateY(-3px); }
+  .tuple-field.active .tf-box { filter: brightness(1.4); transform: translateY(-4px); box-shadow: 0 8px 20px rgba(0,0,0,0.4); }
+  .tf-box {
+    border-radius: 6px;
+    padding: 10px 8px;
+    text-align: center;
+    transition: all 0.2s;
+    width: 100%;
+    min-width: 64px;
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .tf-name {
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    margin-bottom: 3px;
+    white-space: nowrap;
+  }
+  .tf-size {
+    font-family: var(--mono);
+    font-size: 9px;
+    opacity: 0.7;
+  }
+  .tf-label {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--muted);
+    margin-top: 6px;
+    text-align: center;
+    max-width: 70px;
+    line-height: 1.3;
+  }
+
+  /* ── UPDATE ANIMATION VIEW ── */
+  .update-scene {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  .update-step {
+    display: none;
+  }
+  .update-step.active { display: block; }
+
+  .page-mock {
+    background: var(--surface3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  .page-mock-title {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+  .tuple-row {
+    display: flex;
+    gap: 0;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 6px;
+    transition: all 0.3s;
+  }
+  .tuple-row.dead {
+    opacity: 0.5;
+    text-decoration: line-through;
+  }
+  .tuple-row.new-row {
+    border-color: var(--green);
+    box-shadow: 0 0 12px rgba(16,185,129,0.2);
+  }
+  .tuple-row.dead-row {
+    border-color: var(--red);
+    opacity: 0.6;
+  }
+  .tr-cell {
+    padding: 8px 12px;
+    border-right: 1px solid var(--border);
+    font-size: 11px;
+    flex: 1;
+  }
+  .tr-cell:last-child { border-right: none; }
+  .tr-cell .label { font-size: 9px; color: var(--muted); display: block; margin-bottom: 2px; }
+  .tr-cell .val { font-weight: 600; }
+  .xmin-cell { background: rgba(16,185,129,0.08); }
+  .xmax-cell { background: rgba(239,68,68,0.08); }
+  .data-cell { background: rgba(59,130,246,0.08); }
+  .ctid-cell { background: rgba(245,158,11,0.08); }
+
+  .step-controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .step-btn {
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 8px 20px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .step-btn:hover { border-color: var(--accent); }
+  .step-btn.primary {
+    background: rgba(59,130,246,0.15);
+    border-color: var(--accent);
+    color: #60a5fa;
+  }
+  .step-indicator {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .step-title {
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .step-desc {
+    font-size: 13px;
+    color: #94a3b8;
+    line-height: 1.7;
+    margin-bottom: 16px;
+  }
+  .step-desc strong { color: var(--text); }
+  .step-desc code {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: rgba(59,130,246,0.12);
+    color: #60a5fa;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+
+  /* ── TOAST VIEW ── */
+  .toast-layout {
+    display: grid;
+    grid-template-columns: 1fr 60px 1fr;
+    gap: 0;
+    align-items: stretch;
+    margin-bottom: 20px;
+  }
+  .toast-table {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+  .toast-table-header {
+    padding: 10px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+  }
+  .toast-row {
+    border-top: 1px solid var(--border);
+    padding: 10px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .toast-row:hover, .toast-row.active { background: rgba(255,255,255,0.04); }
+  .toast-row .row-label { color: var(--muted); font-size: 10px; margin-bottom: 3px; }
+  .toast-row .row-val { font-weight: 600; }
+  .toast-pointer {
+    background: rgba(245,158,11,0.15);
+    color: var(--amber);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 3px;
+    display: inline-block;
+    margin-top: 3px;
+  }
+  .toast-connector {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 0 8px;
+    gap: 4px;
+  }
+  .conn-line {
+    flex: 1;
+    width: 2px;
+    background: linear-gradient(to bottom, var(--amber), rgba(245,158,11,0.2));
+    border-radius: 1px;
+  }
+  .conn-arrow {
+    font-size: 16px;
+    color: var(--amber);
+  }
+
+  /* ── DETAIL PANEL ── */
+  .detail-panel {
+    margin-top: 28px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    min-height: 120px;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+  }
+  .detail-panel::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--panel-color, var(--cyan)), transparent);
+  }
+  .detail-panel.empty { opacity: 0.4; }
+  .dp-title {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--panel-color, var(--cyan));
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .dp-body {
+    font-size: 13px;
+    line-height: 1.8;
+    color: #94a3b8;
+  }
+  .dp-body strong { color: var(--text); }
+  .dp-body code {
+    font-family: var(--mono);
+    font-size: 11px;
+    background: rgba(59,130,246,0.1);
+    color: #60a5fa;
+    padding: 2px 6px;
+    border-radius: 3px;
+  }
+  .dp-body ul { padding-left: 20px; margin-top: 8px; }
+  .dp-body li { margin-bottom: 6px; }
+  .tag {
+    display: inline-block;
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 3px 10px;
+    border-radius: 3px;
+    margin: 4px 4px 0 0;
+    border: 1px solid;
+  }
+  .tag-warn { color: var(--amber); border-color: rgba(245,158,11,0.4); background: rgba(245,158,11,0.08); }
+  .tag-ok   { color: var(--green); border-color: rgba(16,185,129,0.4); background: rgba(16,185,129,0.08); }
+  .tag-info { color: var(--cyan);  border-color: rgba(6,182,212,0.4);  background: rgba(6,182,212,0.08); }
+  .tag-danger { color: var(--red); border-color: rgba(239,68,68,0.4);  background: rgba(239,68,68,0.08); }
+
+  /* HOT update visual */
+  .hot-visual {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+  .hot-box {
+    background: var(--surface3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+  }
+  .hot-box-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  @media (max-width: 640px) {
+    .toast-layout { grid-template-columns: 1fr; }
+    .toast-connector { display: none; }
+    .hot-visual { grid-template-columns: 1fr; }
+    .tuple-visual { gap: 2px; }
+    .tf-box { min-width: 52px; padding: 8px 4px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <header>
+    <div class="badge">storage internals · visual guide</div>
+    <h1>PostgreSQL Storage Internals</h1>
+    <p class="subtitle">Pages · Tuples · MVCC Headers · TOAST · HOT Updates</p>
+  </header>
+
+  <p class="hint">▼ Click any component to learn more ▼</p>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <div class="tab active" style="--tab-color:#06b6d4" onclick="switchTab('page')">📄 8KB Page Structure</div>
+    <div class="tab" style="--tab-color:#8b5cf6" onclick="switchTab('tuple')">🧬 Tuple Header</div>
+    <div class="tab" style="--tab-color:#10b981" onclick="switchTab('update')">🔄 UPDATE Internals</div>
+    <div class="tab" style="--tab-color:#f59e0b" onclick="switchTab('toast')">🍞 TOAST Storage</div>
+    <div class="tab" style="--tab-color:#ec4899" onclick="switchTab('hot')">⚡ HOT Updates</div>
+    <div class="tab" style="--tab-color:#f97316" onclick="switchTab('offsets')">📍 Offsets &amp; ctid</div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- TAB 1: PAGE STRUCTURE -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="view active" id="view-page">
+    <div class="section-label" style="color:var(--cyan)">8KB Page — The Fundamental I/O Unit</div>
+
+    <!-- Visual bar showing proportions -->
+    <div class="page-visual">
+      <div class="pv-seg" style="width:4%; background:linear-gradient(135deg,#0e4f6b,#0a3d54)" onclick="showDetail('pg_header')">
+        <span style="writing-mode:vertical-lr;font-size:9px">HDR</span>
+      </div>
+      <div class="pv-seg" style="width:12%; background:linear-gradient(135deg,#1a3a6e,#122d5c)" onclick="showDetail('pg_itemptr')">
+        <span>item ptrs</span>
+      </div>
+      <div class="pv-seg" style="width:34%; background:linear-gradient(135deg,#0d2035,#0a1828)" onclick="showDetail('pg_free')">
+        <span style="color:rgba(255,255,255,0.3)">free space</span>
+      </div>
+      <div class="pv-seg" style="width:20%; background:linear-gradient(135deg,#1a3a2a,#122d20)" onclick="showDetail('pg_tuple3')">
+        <span>tuple 3</span>
+      </div>
+      <div class="pv-seg" style="width:18%; background:linear-gradient(135deg,#1a3520,#12281a)" onclick="showDetail('pg_tuple2')">
+        <span>tuple 2</span>
+      </div>
+      <div class="pv-seg" style="width:12%; background:linear-gradient(135deg,#1a3020,#12251a)" onclick="showDetail('pg_tuple1')">
+        <span>tuple 1</span>
+      </div>
+    </div>
+    <div style="display:flex; justify-content:space-between; font-family:var(--mono); font-size:10px; color:var(--muted); margin-bottom:20px; padding:0 4px">
+      <span>← offset 0</span>
+      <span>← item ptrs grow →</span>
+      <span>← tuples grow ←</span>
+      <span>offset 8192 →</span>
+    </div>
+
+    <!-- Regions -->
+    <div class="page-container">
+      <div class="page-header-bar">
+        <span class="page-title">📄 Page (Block) #0</span>
+        <span class="page-size-badge">8,192 bytes total</span>
+      </div>
+
+      <div class="page-region" style="--region-color:#06b6d4" onclick="showDetail('pg_header')" id="pr-pg_header">
+        <div class="region-header">
+          <span style="font-size:18px">🔖</span>
+          <span class="region-name" style="--region-color:#06b6d4">Page Header</span>
+          <span class="region-size">24 bytes</span>
+        </div>
+        <div class="region-desc">LSN · checksum · flags · free space pointers · layout version</div>
+      </div>
+
+      <div class="page-region" style="--region-color:#3b82f6" onclick="showDetail('pg_itemptr')" id="pr-pg_itemptr">
+        <div class="region-header">
+          <span style="font-size:18px">🗺️</span>
+          <span class="region-name" style="--region-color:#3b82f6">Item Pointers (Line Pointers)</span>
+          <span class="region-size">4 bytes each</span>
+        </div>
+        <div class="region-desc">Array of (offset, length) pairs — one per tuple. Indexes use these to locate rows.</div>
+      </div>
+
+      <div class="page-region" style="--region-color:#1e3a5f" onclick="showDetail('pg_free')" id="pr-pg_free">
+        <div class="region-header">
+          <span style="font-size:18px">⬜</span>
+          <span class="region-name" style="--region-color:#475569">Free Space</span>
+          <span class="region-size">varies</span>
+        </div>
+        <div class="region-desc">Available space between item pointers (growing down) and tuples (growing up)</div>
+      </div>
+
+      <div class="page-region" style="--region-color:#10b981" onclick="showDetail('pg_tuple1')" id="pr-pg_tuple1">
+        <div class="region-header">
+          <span style="font-size:18px">📦</span>
+          <span class="region-name" style="--region-color:#10b981">Tuples (Row Versions)</span>
+          <span class="region-size">varies</span>
+        </div>
+        <div class="region-desc">Actual row data packed from the bottom up. Each has a 23-byte header + nullable bitmap + columns.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- TAB 2: TUPLE HEADER -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="view" id="view-tuple">
+    <div class="section-label" style="color:var(--purple)">Tuple Header — Every Row Has This Prepended</div>
+
+    <div class="tuple-container">
+      <div class="tuple-header-bar">
+        <span class="tuple-title">🧬 Tuple (Row Version) Layout</span>
+        <span style="font-family:var(--mono);font-size:11px;color:var(--muted)">23-byte header + data</span>
+      </div>
+
+      <div class="tuple-visual" style="padding:20px 16px">
+        <!-- Header fields -->
+        <div class="tuple-field" onclick="showDetail('t_xmin')" id="tf-t_xmin">
+          <div class="tf-box" style="background:rgba(16,185,129,0.15);border-color:rgba(16,185,129,0.4)">
+            <div class="tf-name" style="color:#10b981">xmin</div>
+            <div class="tf-size">4 bytes</div>
+          </div>
+          <div class="tf-label">Inserting XID</div>
+        </div>
+
+        <div class="tuple-field" onclick="showDetail('t_xmax')" id="tf-t_xmax">
+          <div class="tf-box" style="background:rgba(239,68,68,0.15);border-color:rgba(239,68,68,0.4)">
+            <div class="tf-name" style="color:#ef4444">xmax</div>
+            <div class="tf-size">4 bytes</div>
+          </div>
+          <div class="tf-label">Deleting XID</div>
+        </div>
+
+        <div class="tuple-field" onclick="showDetail('t_cid')" id="tf-t_cid">
+          <div class="tf-box" style="background:rgba(139,92,246,0.15);border-color:rgba(139,92,246,0.4)">
+            <div class="tf-name" style="color:#8b5cf6">cid</div>
+            <div class="tf-size">4 bytes</div>
+          </div>
+          <div class="tf-label">Command ID</div>
+        </div>
+
+        <div class="tuple-field" onclick="showDetail('t_ctid')" id="tf-t_ctid">
+          <div class="tf-box" style="background:rgba(245,158,11,0.15);border-color:rgba(245,158,11,0.4)">
+            <div class="tf-name" style="color:#f59e0b">ctid</div>
+            <div class="tf-size">6 bytes</div>
+          </div>
+          <div class="tf-label">Physical location</div>
+        </div>
+
+        <div class="tuple-field" onclick="showDetail('t_infomask')" id="tf-t_infomask">
+          <div class="tf-box" style="background:rgba(6,182,212,0.15);border-color:rgba(6,182,212,0.4)">
+            <div class="tf-name" style="color:#06b6d4">infomask</div>
+            <div class="tf-size">2+2 bytes</div>
+          </div>
+          <div class="tf-label">Status flags</div>
+        </div>
+
+        <div class="tuple-field" onclick="showDetail('t_natts')" id="tf-t_natts">
+          <div class="tf-box" style="background:rgba(99,102,241,0.15);border-color:rgba(99,102,241,0.4)">
+            <div class="tf-name" style="color:#6366f1">natts</div>
+            <div class="tf-size">2 bytes</div>
+          </div>
+          <div class="tf-label">Column count</div>
+        </div>
+
+        <div class="tuple-field" onclick="showDetail('t_hoff')" id="tf-t_hoff">
+          <div class="tf-box" style="background:rgba(236,72,153,0.15);border-color:rgba(236,72,153,0.4)">
+            <div class="tf-name" style="color:#ec4899">hoff</div>
+            <div class="tf-size">1 byte</div>
+          </div>
+          <div class="tf-label">Header offset</div>
+        </div>
+
+        <!-- Separator -->
+        <div style="display:flex;align-items:center;padding:0 8px">
+          <div style="width:2px;height:60px;background:linear-gradient(to bottom, var(--border), rgba(59,130,246,0.5));border-radius:1px"></div>
+        </div>
+
+        <div class="tuple-field" onclick="showDetail('t_nullbits')" id="tf-t_nullbits">
+          <div class="tf-box" style="background:rgba(59,130,246,0.1);border-color:rgba(59,130,246,0.3);border-style:dashed">
+            <div class="tf-name" style="color:#60a5fa">NULL bitmap</div>
+            <div class="tf-size">optional</div>
+          </div>
+          <div class="tf-label">Which cols are null</div>
+        </div>
+
+        <div class="tuple-field" onclick="showDetail('t_data')" id="tf-t_data">
+          <div class="tf-box" style="background:rgba(255,255,255,0.05);border-color:rgba(255,255,255,0.15);min-width:120px">
+            <div class="tf-name" style="color:var(--text)">actual row data</div>
+            <div class="tf-size">id · name · email · ...</div>
+          </div>
+          <div class="tf-label">Your column values</div>
+        </div>
+      </div>
+
+      <!-- Live example -->
+      <div style="padding:0 16px 16px">
+        <div style="font-family:var(--mono);font-size:10px;letter-spacing:0.1em;color:var(--muted);text-transform:uppercase;margin-bottom:10px">Live Example — SELECT xmin, xmax, ctid, * FROM users LIMIT 1</div>
+        <div style="display:flex;gap:3px;flex-wrap:wrap">
+          <div style="background:rgba(16,185,129,0.12);border:1px solid rgba(16,185,129,0.3);border-radius:5px;padding:8px 12px;font-family:var(--mono);font-size:11px">
+            <div style="color:var(--muted);font-size:9px;margin-bottom:3px">xmin</div>
+            <div style="color:#10b981;font-weight:700">10423</div>
+          </div>
+          <div style="background:rgba(239,68,68,0.12);border:1px solid rgba(239,68,68,0.3);border-radius:5px;padding:8px 12px;font-family:var(--mono);font-size:11px">
+            <div style="color:var(--muted);font-size:9px;margin-bottom:3px">xmax</div>
+            <div style="color:#ef4444;font-weight:700">0</div>
+          </div>
+          <div style="background:rgba(245,158,11,0.12);border:1px solid rgba(245,158,11,0.3);border-radius:5px;padding:8px 12px;font-family:var(--mono);font-size:11px">
+            <div style="color:var(--muted);font-size:9px;margin-bottom:3px">ctid</div>
+            <div style="color:#f59e0b;font-weight:700">(0,1)</div>
+          </div>
+          <div style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.3);border-radius:5px;padding:8px 12px;font-family:var(--mono);font-size:11px">
+            <div style="color:var(--muted);font-size:9px;margin-bottom:3px">id</div>
+            <div style="color:#60a5fa;font-weight:700">1</div>
+          </div>
+          <div style="background:rgba(59,130,246,0.12);border:1px solid rgba(59,130,246,0.3);border-radius:5px;padding:8px 12px;font-family:var(--mono);font-size:11px">
+            <div style="color:var(--muted);font-size:9px;margin-bottom:3px">name</div>
+            <div style="color:#60a5fa;font-weight:700">Alice</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- TAB 3: UPDATE INTERNALS -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="view" id="view-update">
+    <div class="section-label" style="color:var(--green)">UPDATE = DELETE old + INSERT new (never overwrites!)</div>
+
+    <div class="step-controls">
+      <button class="step-btn" onclick="prevStep()">← Prev</button>
+      <button class="step-btn primary" onclick="nextStep()">Next →</button>
+      <span class="step-indicator" id="step-indicator">Step 1 / 4</span>
+      <span style="font-family:var(--mono);font-size:11px;color:var(--muted)" id="step-sql"></span>
+    </div>
+
+    <div class="update-scene">
+      <!-- STEP 1: Initial state -->
+      <div class="update-step active" id="step-1">
+        <div class="step-title">📋 Initial State — Row exists, transaction 10423 inserted it</div>
+        <div class="step-desc">A user row was inserted by transaction <strong>10423</strong>. The tuple sits at physical location <code>(page 3, offset 1)</code>. <code>xmax = 0</code> means nobody has deleted it — it's fully alive.</div>
+        <div class="page-mock">
+          <div class="page-mock-title">Page 3 of users table</div>
+          <div class="tuple-row">
+            <div class="tr-cell xmin-cell"><span class="label">xmin</span><span class="val" style="color:#10b981">10423</span></div>
+            <div class="tr-cell xmax-cell"><span class="label">xmax</span><span class="val" style="color:#10b981">0</span></div>
+            <div class="tr-cell ctid-cell"><span class="label">ctid</span><span class="val" style="color:#f59e0b">(3,1)</span></div>
+            <div class="tr-cell data-cell"><span class="label">name</span><span class="val">'Alice'</span></div>
+            <div class="tr-cell data-cell"><span class="label">status</span><span class="val">live ✓</span></div>
+          </div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:12px">[ free space ......................................... ]</div>
+        </div>
+      </div>
+
+      <!-- STEP 2: UPDATE runs -->
+      <div class="update-step" id="step-2">
+        <div class="step-title">⚡ UPDATE runs — Transaction 10891 changes name to 'Alicia'</div>
+        <div class="step-desc"><code>UPDATE users SET name = 'Alicia' WHERE id = 1;</code> — Transaction <strong>10891</strong> is now running. Postgres does NOT overwrite the existing tuple. Instead it marks the old tuple's <code>xmax = 10891</code> (meaning "deleted by this transaction") and writes a brand new tuple below it.</div>
+        <div class="page-mock">
+          <div class="page-mock-title">Page 3 of users table</div>
+          <div class="tuple-row dead-row">
+            <div class="tr-cell xmin-cell"><span class="label">xmin</span><span class="val" style="color:#10b981">10423</span></div>
+            <div class="tr-cell xmax-cell"><span class="label">xmax</span><span class="val" style="color:#ef4444">10891 ← set!</span></div>
+            <div class="tr-cell ctid-cell"><span class="label">ctid</span><span class="val" style="color:#f59e0b">(3,2) →</span></div>
+            <div class="tr-cell data-cell"><span class="label">name</span><span class="val" style="text-decoration:line-through;color:var(--muted)">'Alice'</span></div>
+            <div class="tr-cell" style="background:rgba(239,68,68,0.1)"><span class="label">status</span><span class="val" style="color:#ef4444">dead tuple</span></div>
+          </div>
+          <div class="tuple-row new-row">
+            <div class="tr-cell xmin-cell"><span class="label">xmin</span><span class="val" style="color:#10b981">10891 ← new!</span></div>
+            <div class="tr-cell xmax-cell"><span class="label">xmax</span><span class="val" style="color:#10b981">0</span></div>
+            <div class="tr-cell ctid-cell"><span class="label">ctid</span><span class="val" style="color:#f59e0b">(3,2)</span></div>
+            <div class="tr-cell data-cell"><span class="label">name</span><span class="val" style="color:#10b981">'Alicia' ← new!</span></div>
+            <div class="tr-cell" style="background:rgba(16,185,129,0.1)"><span class="label">status</span><span class="val" style="color:#10b981">live ✓</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 3: Two transactions see different things -->
+      <div class="update-step" id="step-3">
+        <div class="step-title">👁️ MVCC in action — Two transactions see different versions</div>
+        <div class="step-desc">While transaction 10891 is still running (not yet committed), an older transaction <strong>10500</strong> still reads the old tuple. This is MVCC — <strong>readers don't block writers, writers don't block readers.</strong> Both versions coexist on the same page simultaneously.</div>
+        <div class="page-mock">
+          <div class="page-mock-title">Page 3 — What each transaction sees</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div>
+              <div style="font-family:var(--mono);font-size:10px;color:#10b981;margin-bottom:6px">Transaction 10500 sees:</div>
+              <div class="tuple-row" style="border-color:#10b981">
+                <div class="tr-cell data-cell"><span class="label">name</span><span class="val">'Alice'</span></div>
+                <div class="tr-cell"><span class="label">reason</span><span class="val" style="color:#10b981;font-size:10px">xmax=10891 not committed yet</span></div>
+              </div>
+            </div>
+            <div>
+              <div style="font-family:var(--mono);font-size:10px;color:#3b82f6;margin-bottom:6px">Transaction 10891 sees:</div>
+              <div class="tuple-row" style="border-color:#3b82f6">
+                <div class="tr-cell data-cell"><span class="label">name</span><span class="val" style="color:#10b981">'Alicia'</span></div>
+                <div class="tr-cell"><span class="label">reason</span><span class="val" style="color:#3b82f6;font-size:10px">xmin=10891 = my own XID</span></div>
+              </div>
+            </div>
+          </div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:12px;padding:8px;background:rgba(59,130,246,0.05);border-radius:4px">
+            Both old AND new tuples physically exist on the same page right now.
+          </div>
+        </div>
+      </div>
+
+      <!-- STEP 4: After commit + VACUUM -->
+      <div class="update-step" id="step-4">
+        <div class="step-title">🧹 After Commit + VACUUM — Dead tuple reclaimed</div>
+        <div class="step-desc">Transaction 10891 commits. Now all transactions started after it will see <strong>'Alicia'</strong>. The old tuple is now truly dead — nobody can ever see it again. But it still physically occupies space! <strong>VACUUM</strong> eventually comes along and marks that space as reusable for future inserts.</div>
+        <div class="page-mock">
+          <div class="page-mock-title">Page 3 — After VACUUM</div>
+          <div class="tuple-row new-row">
+            <div class="tr-cell xmin-cell"><span class="label">xmin</span><span class="val" style="color:#10b981">10891</span></div>
+            <div class="tr-cell xmax-cell"><span class="label">xmax</span><span class="val" style="color:#10b981">0</span></div>
+            <div class="tr-cell ctid-cell"><span class="label">ctid</span><span class="val" style="color:#f59e0b">(3,2)</span></div>
+            <div class="tr-cell data-cell"><span class="label">name</span><span class="val" style="color:#10b981">'Alicia'</span></div>
+            <div class="tr-cell" style="background:rgba(16,185,129,0.1)"><span class="label">status</span><span class="val" style="color:#10b981">live ✓</span></div>
+          </div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-top:8px;padding:8px;background:rgba(16,185,129,0.05);border:1px dashed rgba(16,185,129,0.2);border-radius:4px">
+            [ reclaimed free space — old 'Alice' tuple gone, available for new inserts ]
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- TAB 4: TOAST -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="view" id="view-toast">
+    <div class="section-label" style="color:var(--amber)">TOAST — Oversized Attribute Storage</div>
+
+    <div class="toast-layout">
+      <!-- Main table -->
+      <div class="toast-table">
+        <div class="toast-table-header" style="background:rgba(59,130,246,0.1);color:#60a5fa">
+          📋 users (main table)
+        </div>
+        <div class="toast-row" onclick="showDetail('toast_small')">
+          <div class="row-label">id=1 · name='Bob' · bio=</div>
+          <div class="row-val" style="color:var(--text)">"Hi, I'm Bob."</div>
+          <div style="margin-top:4px"><span style="font-family:var(--mono);font-size:10px;color:var(--green);background:rgba(16,185,129,0.1);padding:2px 8px;border-radius:3px">✓ inline (small)</span></div>
+        </div>
+        <div class="toast-row active" onclick="showDetail('toast_large')">
+          <div class="row-label">id=2 · name='Alice' · bio=</div>
+          <div class="row-val" style="color:var(--amber)">[toast pointer]</div>
+          <div style="margin-top:4px"><span class="toast-pointer">→ toast_oid:48291 chunk_id:1</span></div>
+        </div>
+        <div class="toast-row" onclick="showDetail('toast_small')">
+          <div class="row-label">id=3 · name='Eve' · bio=</div>
+          <div class="row-val" style="color:var(--text)">"Developer."</div>
+          <div style="margin-top:4px"><span style="font-family:var(--mono);font-size:10px;color:var(--green);background:rgba(16,185,129,0.1);padding:2px 8px;border-radius:3px">✓ inline (small)</span></div>
+        </div>
+      </div>
+
+      <!-- Connector -->
+      <div class="toast-connector">
+        <div class="conn-line"></div>
+        <div class="conn-arrow">→</div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--amber);writing-mode:vertical-lr;letter-spacing:0.1em">TOAST FETCH</div>
+        <div class="conn-arrow">→</div>
+        <div class="conn-line"></div>
+      </div>
+
+      <!-- TOAST table -->
+      <div class="toast-table">
+        <div class="toast-table-header" style="background:rgba(245,158,11,0.1);color:var(--amber)">
+          🍞 pg_toast.pg_toast_users
+        </div>
+        <div class="toast-row" onclick="showDetail('toast_chunks')">
+          <div class="row-label">chunk_id=1 · seq=0</div>
+          <div class="row-val" style="color:#94a3b8;font-size:10px">[compressed bytes 0–1999]</div>
+        </div>
+        <div class="toast-row" onclick="showDetail('toast_chunks')">
+          <div class="row-label">chunk_id=1 · seq=1</div>
+          <div class="row-val" style="color:#94a3b8;font-size:10px">[compressed bytes 2000–3999]</div>
+        </div>
+        <div class="toast-row" onclick="showDetail('toast_chunks')">
+          <div class="row-label">chunk_id=1 · seq=2</div>
+          <div class="row-val" style="color:#94a3b8;font-size:10px">[compressed bytes 4000–end]</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TOAST strategies -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px">
+      <div class="page-region" style="--region-color:#10b981;cursor:pointer;border-radius:8px;background:var(--surface2);border:1px solid var(--border)" onclick="showDetail('toast_extended')">
+        <div class="region-header"><span class="region-name" style="--region-color:#10b981">EXTENDED</span><span style="font-family:var(--mono);font-size:9px;color:var(--green);margin-left:auto">default</span></div>
+        <div class="region-desc">Compress first, then out-of-line. Best for text/jsonb.</div>
+      </div>
+      <div class="page-region" style="--region-color:#3b82f6;cursor:pointer;border-radius:8px;background:var(--surface2);border:1px solid var(--border)" onclick="showDetail('toast_external')">
+        <div class="region-header"><span class="region-name" style="--region-color:#3b82f6">EXTERNAL</span></div>
+        <div class="region-desc">Out-of-line, no compression. Fast random access into bytea.</div>
+      </div>
+      <div class="page-region" style="--region-color:#8b5cf6;cursor:pointer;border-radius:8px;background:var(--surface2);border:1px solid var(--border)" onclick="showDetail('toast_main')">
+        <div class="region-header"><span class="region-name" style="--region-color:#8b5cf6">MAIN</span></div>
+        <div class="region-desc">Compress inline, avoid out-of-line. Best for values read whole.</div>
+      </div>
+      <div class="page-region" style="--region-color:#475569;cursor:pointer;border-radius:8px;background:var(--surface2);border:1px solid var(--border)" onclick="showDetail('toast_plain')">
+        <div class="region-header"><span class="region-name" style="--region-color:#475569">PLAIN</span></div>
+        <div class="region-desc">No TOAST. Must fit in page. Used for int, bool, timestamp.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- TAB 5: HOT UPDATES -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="view" id="view-hot">
+    <div class="section-label" style="color:var(--pink)">HOT Updates — Heap-Only Tuple Optimization</div>
+
+    <div class="hot-visual">
+      <div class="hot-box" onclick="showDetail('hot_normal')" style="cursor:pointer;border-color:rgba(239,68,68,0.3)">
+        <div class="hot-box-title" style="color:#ef4444">❌ Normal UPDATE (index update needed)</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:12px">UPDATE users SET <strong style="color:var(--text)">email</strong> = '...' — email IS indexed</div>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.8">
+          1. Index (email) → old ctid (3,1)<br>
+          2. Heap page: old tuple marked dead<br>
+          3. New tuple written at (3,2)<br>
+          <strong style="color:#ef4444">4. Index must be updated → (3,2) ← expensive!</strong>
+        </div>
+        <div style="margin-top:12px;font-family:var(--mono);font-size:10px;padding:8px;background:rgba(239,68,68,0.08);border-radius:4px">
+          Index: email_idx → (3,1) [stale]<br>
+          Must update: email_idx → (3,2) 💸
+        </div>
+      </div>
+
+      <div class="hot-box" onclick="showDetail('hot_hot')" style="cursor:pointer;border-color:rgba(16,185,129,0.3)">
+        <div class="hot-box-title" style="color:#10b981">✅ HOT Update (no index update)</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:12px">UPDATE users SET <strong style="color:var(--text)">bio</strong> = '...' — bio is NOT indexed</div>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.8">
+          1. Index (email) → item_ptr[1]<br>
+          2. item_ptr[1]: old tuple marked dead<br>
+          3. New tuple written on SAME page<br>
+          <strong style="color:#10b981">4. item_ptr[1] chains to new tuple ✓</strong>
+        </div>
+        <div style="margin-top:12px;font-family:var(--mono);font-size:10px;padding:8px;background:rgba(16,185,129,0.08);border-radius:4px">
+          Index: email_idx → item_ptr[1]<br>
+          item_ptr[1] → HOT chain → new tuple 🚀
+        </div>
+      </div>
+    </div>
+
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+      <div style="font-family:var(--mono);font-size:11px;letter-spacing:0.1em;color:var(--pink);text-transform:uppercase;margin-bottom:12px">HOT Chain — How item pointers forward to new tuple</div>
+      <div style="font-family:var(--mono);font-size:12px;line-height:2;color:#94a3b8">
+        <span style="color:var(--accent)">Index</span> → item_ptr[1] (offset=100) → 
+        <span style="color:#ef4444">old tuple</span> (xmax=10891, <span style="color:var(--pink)">HEAP_HOT_UPDATED flag</span>) →<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;↓ HOT chain pointer<br>
+        &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:#10b981">new tuple</span> (xmin=10891, <span style="color:var(--pink)">HEAP_ONLY_TUPLE flag</span>)
+      </div>
+      <div style="margin-top:10px;font-size:12px;color:#64748b">
+        <strong style="color:var(--text)">Requirement:</strong> New tuple must fit on the <strong>same page</strong> as the old tuple. If the page is full, HOT is not possible — a regular update with index maintenance is used instead.
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- TAB 6: OFFSETS & ctid -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="view" id="view-offsets">
+    <div class="section-label" style="color:#f97316">📍 What Is an Offset? How ctid Works</div>
+
+    <!-- Analogy block -->
+    <div style="background:linear-gradient(135deg,rgba(249,115,22,0.08),rgba(249,115,22,0.03));border:1px solid rgba(249,115,22,0.25);border-radius:10px;padding:20px;margin-bottom:20px">
+      <div style="font-family:var(--mono);font-size:11px;letter-spacing:0.12em;color:#f97316;text-transform:uppercase;margin-bottom:12px">The Core Idea — Byte Position From The Start</div>
+      <div style="font-size:13px;color:#94a3b8;line-height:1.8">
+        An <strong style="color:var(--text)">offset</strong> is simply <strong style="color:#f97316">how many bytes to skip from the beginning</strong> of something to reach a target.<br>
+        Think of a 8192-character book page where every character has a position number starting at 0.<br>
+        <span style="color:#f97316">Offset 200</span> means: <em>"skip the first 200 bytes, your data starts here."</em>
+      </div>
+    </div>
+
+    <!-- FILE → PAGE → BYTE visual -->
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px">
+      <div style="background:rgba(249,115,22,0.1);border-bottom:1px solid rgba(249,115,22,0.2);padding:12px 20px;font-family:var(--mono);font-size:11px;color:#f97316;font-weight:700;letter-spacing:0.1em;text-transform:uppercase">
+        How Postgres locates a tuple from ctid = (3, 2)
+      </div>
+
+      <!-- Step 1: File level -->
+      <div style="padding:20px;border-bottom:1px solid var(--border)">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px">Step 1 — Jump to Page 3 in the heap file</div>
+        <div style="display:flex;gap:3px;margin-bottom:10px;overflow-x:auto">
+          <div style="min-width:80px;height:44px;background:rgba(100,116,139,0.15);border:1px solid var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:var(--muted);flex-shrink:0">
+            Page 0<br><span style="font-size:9px;opacity:0.6">8192 bytes</span>
+          </div>
+          <div style="min-width:80px;height:44px;background:rgba(100,116,139,0.15);border:1px solid var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:var(--muted);flex-shrink:0">
+            Page 1<br><span style="font-size:9px;opacity:0.6">8192 bytes</span>
+          </div>
+          <div style="min-width:80px;height:44px;background:rgba(100,116,139,0.15);border:1px solid var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:var(--muted);flex-shrink:0">
+            Page 2<br><span style="font-size:9px;opacity:0.6">8192 bytes</span>
+          </div>
+          <div style="min-width:80px;height:44px;background:rgba(249,115,22,0.2);border:2px solid #f97316;border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:#f97316;font-weight:700;flex-shrink:0;box-shadow:0 0 12px rgba(249,115,22,0.2)">
+            Page 3 ✓<br><span style="font-size:9px">← we are here</span>
+          </div>
+          <div style="min-width:80px;height:44px;background:rgba(100,116,139,0.15);border:1px solid var(--border);border-radius:4px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:10px;color:var(--muted);flex-shrink:0">
+            Page 4<br><span style="font-size:9px;opacity:0.6">8192 bytes</span>
+          </div>
+          <div style="min-width:60px;height:44px;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;color:var(--muted);flex-shrink:0">...</div>
+        </div>
+        <div style="font-family:var(--mono);font-size:11px;color:#f97316;padding:8px 12px;background:rgba(249,115,22,0.06);border-radius:6px;border-left:3px solid #f97316">
+          File byte position = 3 × 8192 = <strong>24,576 bytes</strong> from start of file
+        </div>
+      </div>
+
+      <!-- Step 2: Within the page — item pointers -->
+      <div style="padding:20px;border-bottom:1px solid var(--border)" id="offset-step2" onclick="showDetail('off_itemptr')" style="cursor:pointer">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px">Step 2 — Read item pointer #2 to get the byte offset</div>
+
+        <!-- Page 3 internal layout -->
+        <div style="background:var(--surface3);border:1px solid var(--border);border-radius:8px;padding:14px;font-family:var(--mono);font-size:11px;overflow-x:auto">
+          <div style="color:var(--muted);font-size:10px;margin-bottom:10px;letter-spacing:0.1em">PAGE 3 INTERNALS (byte positions):</div>
+
+          <!-- Header row -->
+          <div style="display:flex;gap:2px;margin-bottom:8px;flex-wrap:nowrap">
+            <div style="background:rgba(6,182,212,0.15);border:1px solid rgba(6,182,212,0.3);border-radius:4px;padding:6px 10px;min-width:90px;flex-shrink:0">
+              <div style="font-size:9px;color:var(--cyan);margin-bottom:2px">bytes 0–23</div>
+              <div style="color:var(--cyan);font-weight:700;font-size:10px">Page Header</div>
+            </div>
+            <div style="background:rgba(100,116,139,0.1);border:1px dashed rgba(59,130,246,0.2);border-radius:4px;padding:6px 10px;min-width:80px;flex-shrink:0">
+              <div style="font-size:9px;color:var(--muted);margin-bottom:2px">bytes 24–27</div>
+              <div style="color:#64748b;font-size:10px">item_ptr[1]<br><span style="color:#475569;font-size:9px">→ offset 8100</span></div>
+            </div>
+            <div style="background:rgba(249,115,22,0.15);border:2px solid rgba(249,115,22,0.5);border-radius:4px;padding:6px 10px;min-width:80px;flex-shrink:0;box-shadow:0 0 8px rgba(249,115,22,0.15)">
+              <div style="font-size:9px;color:#f97316;margin-bottom:2px">bytes 28–31</div>
+              <div style="color:#f97316;font-weight:700;font-size:10px">item_ptr[2] ✓<br><span style="font-size:9px">→ offset 7950</span></div>
+            </div>
+            <div style="background:rgba(100,116,139,0.1);border:1px dashed rgba(59,130,246,0.2);border-radius:4px;padding:6px 10px;min-width:80px;flex-shrink:0">
+              <div style="font-size:9px;color:var(--muted);margin-bottom:2px">bytes 32–35</div>
+              <div style="color:#64748b;font-size:10px">item_ptr[3]<br><span style="color:#475569;font-size:9px">→ offset 7800</span></div>
+            </div>
+            <div style="flex:1;min-width:40px;display:flex;align-items:center;justify-content:center;color:var(--muted);font-size:12px">···</div>
+            <div style="background:rgba(100,116,139,0.1);border:1px dashed var(--border);border-radius:4px;padding:6px 10px;min-width:80px;flex-shrink:0">
+              <div style="font-size:9px;color:var(--muted);margin-bottom:2px">bytes ~400–7799</div>
+              <div style="color:#374151;font-size:10px">free space</div>
+            </div>
+            <div style="background:rgba(100,116,139,0.15);border:1px solid var(--border);border-radius:4px;padding:6px 10px;min-width:80px;flex-shrink:0">
+              <div style="font-size:9px;color:var(--muted);margin-bottom:2px">bytes 7800–7949</div>
+              <div style="color:#94a3b8;font-size:10px">tuple 3<br><span style="font-size:9px">150 bytes</span></div>
+            </div>
+            <div style="background:rgba(249,115,22,0.1);border:2px solid rgba(249,115,22,0.4);border-radius:4px;padding:6px 10px;min-width:80px;flex-shrink:0">
+              <div style="font-size:9px;color:#f97316;margin-bottom:2px">bytes 7950–8099</div>
+              <div style="color:#f97316;font-weight:700;font-size:10px">tuple 2 ✓<br><span style="font-size:9px">150 bytes</span></div>
+            </div>
+            <div style="background:rgba(100,116,139,0.15);border:1px solid var(--border);border-radius:4px;padding:6px 10px;min-width:80px;flex-shrink:0">
+              <div style="font-size:9px;color:var(--muted);margin-bottom:2px">bytes 8100–8191</div>
+              <div style="color:#94a3b8;font-size:10px">tuple 1<br><span style="font-size:9px">92 bytes</span></div>
+            </div>
+          </div>
+
+          <!-- Arrow connecting item_ptr[2] to tuple 2 -->
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px;padding:8px;background:rgba(249,115,22,0.05);border-radius:6px;border:1px dashed rgba(249,115,22,0.2)">
+            <span style="color:#f97316;font-size:16px">↗</span>
+            <span style="color:#f97316;font-size:11px">item_ptr[2] stores offset=7950 → Postgres jumps to byte 7950 on this page → finds <strong>tuple 2</strong></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 3: Final address math -->
+      <div style="padding:20px">
+        <div style="font-family:var(--mono);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:12px">Step 3 — Final absolute byte position in the file</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px">
+          <div style="background:rgba(100,116,139,0.1);border:1px solid var(--border);border-radius:8px;padding:14px;text-align:center">
+            <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px">Page offset in file</div>
+            <div style="font-family:var(--mono);font-size:18px;font-weight:700;color:var(--text)">3 × 8192</div>
+            <div style="font-family:var(--mono);font-size:12px;color:#f97316;margin-top:4px">= 24,576 bytes</div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:24px;color:var(--muted)">+</div>
+          <div style="background:rgba(249,115,22,0.1);border:1px solid rgba(249,115,22,0.3);border-radius:8px;padding:14px;text-align:center">
+            <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px">Tuple offset within page</div>
+            <div style="font-family:var(--mono);font-size:18px;font-weight:700;color:#f97316">7,950</div>
+            <div style="font-family:var(--mono);font-size:12px;color:#f97316;margin-top:4px">from item_ptr[2]</div>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:24px;color:var(--muted)">=</div>
+          <div style="background:rgba(16,185,129,0.1);border:2px solid rgba(16,185,129,0.4);border-radius:8px;padding:14px;text-align:center;box-shadow:0 0 16px rgba(16,185,129,0.1)">
+            <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:6px">Absolute file position</div>
+            <div style="font-family:var(--mono);font-size:18px;font-weight:700;color:#10b981">32,526</div>
+            <div style="font-family:var(--mono);font-size:12px;color:#10b981;margin-top:4px">bytes from file start</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ctid explainer -->
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:20px">
+      <div style="background:rgba(249,115,22,0.1);border-bottom:1px solid rgba(249,115,22,0.2);padding:12px 20px;font-family:var(--mono);font-size:11px;color:#f97316;font-weight:700;letter-spacing:0.1em;text-transform:uppercase">
+        ctid = (page_number, item_pointer_number) — NOT a byte offset directly
+      </div>
+      <div style="padding:20px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+          <div onclick="showDetail('off_ctid_page')" style="cursor:pointer;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.25);border-radius:8px;padding:16px;transition:all 0.2s" onmouseover="this.style.borderColor='#3b82f6'" onmouseout="this.style.borderColor='rgba(59,130,246,0.25)'">
+            <div style="font-family:var(--mono);font-size:22px;font-weight:800;color:#3b82f6;margin-bottom:6px">(3, _)</div>
+            <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:#60a5fa;margin-bottom:6px">Page Number</div>
+            <div style="font-size:12px;color:#64748b;line-height:1.6">Which 8KB page block in the heap file. Skip <code style="font-size:10px;background:rgba(59,130,246,0.1);padding:1px 5px;border-radius:3px">page × 8192</code> bytes to reach it.</div>
+          </div>
+          <div onclick="showDetail('off_ctid_item')" style="cursor:pointer;background:rgba(249,115,22,0.08);border:1px solid rgba(249,115,22,0.25);border-radius:8px;padding:16px;transition:all 0.2s" onmouseover="this.style.borderColor='#f97316'" onmouseout="this.style.borderColor='rgba(249,115,22,0.25)'">
+            <div style="font-family:var(--mono);font-size:22px;font-weight:800;color:#f97316;margin-bottom:6px">(_, 2)</div>
+            <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:#fb923c;margin-bottom:6px">Item Pointer Number</div>
+            <div style="font-size:12px;color:#64748b;line-height:1.6">Which slot in the item pointer array. Each slot is 4 bytes and stores the actual byte offset of the tuple within the page.</div>
+          </div>
+        </div>
+
+        <!-- Why two levels of indirection -->
+        <div style="background:rgba(139,92,246,0.08);border:1px solid rgba(139,92,246,0.2);border-radius:8px;padding:14px" onclick="showDetail('off_why_indirect')" style="cursor:pointer">
+          <div style="font-family:var(--mono);font-size:11px;color:#8b5cf6;font-weight:700;margin-bottom:8px">💡 Why two levels? (Page → Item Ptr → Byte offset)</div>
+          <div style="font-size:12px;color:#94a3b8;line-height:1.7">
+            If indexes stored <strong style="color:var(--text)">direct byte offsets</strong>, then every time VACUUM moved a tuple within a page to compact free space, <strong style="color:#ef4444">every index pointing to that tuple would need updating</strong> — potentially hundreds of index entries.<br><br>
+            With item pointer indirection: VACUUM moves the tuple, updates <strong style="color:#8b5cf6">only the one item pointer</strong>, and all indexes (which store the item pointer number, not the byte offset) automatically find the new location. 🎯
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Book analogy visual -->
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:20px">
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:16px">The Book Analogy</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;color:#f97316;margin-bottom:10px">📚 A real book page</div>
+          <div style="background:var(--surface3);border-radius:6px;padding:12px;font-family:var(--mono);font-size:11px;line-height:2;color:#94a3b8;position:relative">
+            <span style="position:absolute;left:8px;top:8px;font-size:9px;color:var(--muted)">char pos:</span><br>
+            <span style="color:#64748b">0&nbsp;&nbsp;&nbsp;&nbsp;</span><span>"Hello world, this is a "</span><br>
+            <span style="color:#64748b">24&nbsp;&nbsp;</span><span style="color:#f97316;font-weight:700">"database"</span><span> page..."</span>
+          </div>
+          <div style="font-size:12px;color:#64748b;margin-top:8px;line-height:1.6">"database" is at <strong style="color:#f97316">offset 24</strong> — skip 24 characters from the start of the page.</div>
+        </div>
+        <div>
+          <div style="font-family:var(--mono);font-size:11px;color:#3b82f6;margin-bottom:10px">🗄️ A PostgreSQL page</div>
+          <div style="background:var(--surface3);border-radius:6px;padding:12px;font-family:var(--mono);font-size:11px;line-height:2;color:#94a3b8">
+            <span style="color:#64748b">byte 0&nbsp;&nbsp;&nbsp;</span><span>[page header]</span><br>
+            <span style="color:#64748b">byte 24&nbsp;&nbsp;</span><span>[item ptrs...]</span><br>
+            <span style="color:#64748b">byte 7950</span><span style="color:#f97316;font-weight:700"> [your tuple]</span>
+          </div>
+          <div style="font-size:12px;color:#64748b;margin-top:8px;line-height:1.6">Your row is at <strong style="color:#f97316">byte offset 7950</strong> — skip 7950 bytes from start of page 3.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick reference -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px">
+      <div style="background:var(--surface2);border:1px solid rgba(16,185,129,0.3);border-radius:8px;padding:14px;cursor:pointer" onclick="showDetail('off_varsized')">
+        <div style="font-family:var(--mono);font-size:11px;color:#10b981;font-weight:700;margin-bottom:6px">❓ Why not just use row numbers?</div>
+        <div style="font-size:12px;color:#64748b">Rows are variable size — offsets work for anything</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid rgba(239,68,68,0.3);border-radius:8px;padding:14px;cursor:pointer" onclick="showDetail('off_stable')">
+        <div style="font-family:var(--mono);font-size:11px;color:#ef4444;font-weight:700;margin-bottom:6px">⚠️ Is ctid stable?</div>
+        <div style="font-size:12px;color:#64748b">No — VACUUM, CLUSTER, pg_repack can change it</div>
+      </div>
+      <div style="background:var(--surface2);border:1px solid rgba(59,130,246,0.3);border-radius:8px;padding:14px;cursor:pointer" onclick="showDetail('off_inspect')">
+        <div style="font-family:var(--mono);font-size:11px;color:#3b82f6;font-weight:700;margin-bottom:6px">🔍 How to inspect ctid yourself</div>
+        <div style="font-size:12px;color:#64748b">SELECT ctid, * FROM your_table</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════════════════════════════════ -->
+  <!-- DETAIL PANEL -->
+  <!-- ══════════════════════════════════════════ -->
+  <div class="detail-panel empty" id="detail-panel">
+    <div class="dp-title" id="dp-title">← Click any component to see details</div>
+    <div class="dp-body" id="dp-body">Select any highlighted element above for a detailed explanation.</div>
+  </div>
+
+</div>
+
+<script>
+// ── TAB SWITCHING ──
+function switchTab(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  const tabs = { page: 0, tuple: 1, update: 2, toast: 3, hot: 4, offsets: 5 };
+  document.querySelectorAll('.tab')[tabs[name]].classList.add('active');
+  clearDetail();
+}
+
+// ── UPDATE STEPS ──
+let currentStep = 1;
+const totalSteps = 4;
+const stepSQLs = [
+  '',
+  'Running: UPDATE users SET name = \'Alicia\' WHERE id = 1;',
+  'Transaction 10891 in progress...',
+  'Transaction 10891 COMMIT; then VACUUM runs'
+];
+
+function goToStep(n) {
+  document.querySelectorAll('.update-step').forEach(s => s.classList.remove('active'));
+  document.getElementById('step-' + n).classList.add('active');
+  document.getElementById('step-indicator').textContent = `Step ${n} / ${totalSteps}`;
+  document.getElementById('step-sql').textContent = stepSQLs[n-1];
+  currentStep = n;
+}
+function nextStep() { if (currentStep < totalSteps) goToStep(currentStep + 1); }
+function prevStep() { if (currentStep > 1) goToStep(currentStep - 1); }
+
+// ── DETAIL PANEL ──
+const detailData = {
+  // Page regions
+  pg_header: { color: '#06b6d4', icon: '🔖', title: 'Page Header — 24 Bytes of Metadata',
+    body: `Every 8KB page starts with a 24-byte header that Postgres reads before anything else.<br><br>
+    <strong>Key fields:</strong>
+    <ul>
+      <li><strong>LSN (Log Sequence Number)</strong> — the WAL position of the last modification to this page. Used during crash recovery to know which WAL records have already been applied.</li>
+      <li><strong>Checksum</strong> — if <code>data_checksums = on</code>, Postgres verifies this on every read to detect hardware corruption (bit rot).</li>
+      <li><strong>pd_lower</strong> — byte offset to the end of the item pointer array (where the next item pointer would go).</li>
+      <li><strong>pd_upper</strong> — byte offset to the start of the topmost tuple (where the next tuple would end).</li>
+      <li><strong>pd_special</strong> — for index pages, offset to index-specific data. For heap pages, equals page size.</li>
+    </ul>
+    <br><strong>Free space = pd_upper - pd_lower.</strong> When this reaches zero, the page is full.
+    <div style="margin-top:12px"><span class="tag tag-info">Enable data_checksums at initdb time</span><span class="tag tag-warn">Cannot enable checksums on a running cluster without pg_checksums</span></div>` },
+
+  pg_itemptr: { color: '#3b82f6', icon: '🗺️', title: 'Item Pointers — The Indirection Layer',
+    body: `Item pointers (also called line pointers) are a 4-byte array stored right after the page header, growing downward.<br><br>
+    <strong>Each item pointer stores:</strong>
+    <ul>
+      <li><strong>lp_off</strong> — byte offset from page start to the tuple</li>
+      <li><strong>lp_len</strong> — length of the tuple in bytes</li>
+      <li><strong>lp_flags</strong> — state: unused / normal / redirect (HOT) / dead</li>
+    </ul>
+    <br><strong>Why this indirection exists:</strong> Indexes store <code>(page_number, item_pointer_number)</code> as the tuple location — called a <strong>ctid</strong>. When Postgres compacts tuples within a page (e.g., during VACUUM), it moves tuples around but only needs to update the item pointer, not every index that points to that tuple. This is a classic indirection optimization.<br><br>
+    <strong>HOT redirect:</strong> When a HOT update occurs, the old item pointer gets <code>lp_flags = LP_REDIRECT</code> and <code>lp_off</code> points to the new tuple's item pointer number instead of a byte offset.
+    <div style="margin-top:12px"><span class="tag tag-ok">4 bytes per row — very compact</span><span class="tag tag-info">ctid = (page_no, item_ptr_no)</span></div>` },
+
+  pg_free: { color: '#475569', icon: '⬜', title: 'Free Space — Where New Tuples Go',
+    body: `The gap between item pointers (growing down from the top) and tuples (growing up from the bottom).<br><br>
+    <strong>How Postgres tracks free space:</strong> The <strong>Free Space Map (FSM)</strong> is a separate file (<code>tablename_fsm</code>) that tracks approximately how much free space each page has. When Postgres needs to insert a row, it consults the FSM to find a page with enough free space rather than scanning every page.<br><br>
+    <strong>What fills this space:</strong>
+    <ul>
+      <li>New INSERTs claim space from here</li>
+      <li>UPDATEs write the new tuple version here (on same page if HOT)</li>
+    </ul>
+    <strong>What creates free space:</strong>
+    <ul>
+      <li>VACUUM marks dead tuples' space as reusable, updating the FSM</li>
+      <li>DELETE + VACUUM returns the tuple space here</li>
+    </ul>
+    <div style="margin-top:12px"><span class="tag tag-warn">VACUUM reclaims dead tuple space but does NOT return it to the OS</span><span class="tag tag-info">VACUUM FULL rewrites the table and does return space to OS</span></div>` },
+
+  pg_tuple1: { color: '#10b981', icon: '📦', title: 'Tuples — Row Versions Packed from the Bottom',
+    body: `Tuples are stored starting from the bottom of the page and growing upward. Each tuple contains:<br><br>
+    <ul>
+      <li><strong>23-byte tuple header</strong> — xmin, xmax, ctid, infomask flags, column count</li>
+      <li><strong>NULL bitmap</strong> (optional) — one bit per column; only present if any column is NULL</li>
+      <li><strong>Alignment padding</strong> — Postgres aligns column values to their natural alignment (4 bytes for int, 8 bytes for bigint)</li>
+      <li><strong>Column values</strong> — fixed-length columns first (packed densely), then variable-length</li>
+    </ul>
+    <br><strong>Column storage order:</strong> Postgres stores columns in the order they were declared in the schema, not sorted by size. This means a table with alternating int4 and text columns wastes alignment padding bytes. A trick for very wide tables: declare fixed-width columns first.
+    <div style="margin-top:12px"><span class="tag tag-info">SELECT xmin, xmax, ctid, * FROM tbl to inspect headers</span></div>` },
+
+  pg_tuple2: { color: '#10b981', icon: '📦', title: 'Tuples — Row Versions Packed from the Bottom', body: '' },
+  pg_tuple3: { color: '#10b981', icon: '📦', title: 'Tuples — Row Versions Packed from the Bottom', body: '' },
+
+  // Tuple header fields
+  t_xmin: { color: '#10b981', icon: '🟢', title: 'xmin — The Transaction That Inserted This Row',
+    body: `<strong>xmin</strong> stores the <strong>Transaction ID (XID)</strong> of the transaction that inserted this tuple.<br><br>
+    <strong>How visibility works:</strong> When any transaction reads a row, it checks: <em>"Did the transaction with ID = xmin commit before my snapshot started?"</em>
+    <ul>
+      <li>If yes → I can see this row</li>
+      <li>If no (still in-progress or aborted) → I cannot see this row</li>
+    </ul>
+    <br><strong>Special values:</strong>
+    <ul>
+      <li><code>FrozenTransactionId (2)</code> — tuple is "frozen", visible to all transactions. VACUUM sets this to prevent XID wraparound.</li>
+      <li><code>BootstrapTransactionId (1)</code> — used for system catalog rows created during initdb.</li>
+    </ul>
+    <div style="margin-top:12px"><span class="tag tag-ok">xmin = who created me</span><span class="tag tag-info">age(xmin) tells you how old a tuple is</span></div>` },
+
+  t_xmax: { color: '#ef4444', icon: '🔴', title: 'xmax — The Transaction That Deleted This Row',
+    body: `<strong>xmax</strong> stores the XID of the transaction that <strong>deleted or updated</strong> this tuple.<br><br>
+    <strong>Default value: 0</strong> — means nobody has deleted this tuple. It's alive.<br><br>
+    <strong>How it's used:</strong>
+    <ul>
+      <li><strong>DELETE:</strong> Sets xmax = current XID. The tuple is dead once this transaction commits.</li>
+      <li><strong>UPDATE:</strong> Sets xmax = current XID on the old tuple (marking it dead), and inserts a new tuple with xmin = current XID.</li>
+      <li><strong>Row-level locks (SELECT FOR UPDATE):</strong> Temporarily sets xmax to the locking transaction's XID with special infomask flags to indicate it's a lock, not a delete.</li>
+    </ul>
+    <br><strong>VACUUM's job:</strong> Find tuples where xmax is a committed transaction and xmax is older than all running transactions. These are truly dead — no transaction can ever see them again — and VACUUM reclaims their space.
+    <div style="margin-top:12px"><span class="tag tag-warn">xmax ≠ 0 means deleted or locked</span><span class="tag tag-danger">Dead tuples accumulate until VACUUM runs</span></div>` },
+
+  t_ctid: { color: '#f59e0b', icon: '📍', title: 'ctid — Physical Location of This Tuple',
+    body: `<strong>ctid</strong> is a 6-byte pair: <code>(page_number, item_pointer_offset)</code>. It's the physical address of this tuple on disk.<br><br>
+    <strong>How indexes use it:</strong> B-tree and other index types store ctid values as their "pointers to the heap." An index lookup returns a ctid, which Postgres uses to jump directly to the right page and offset in the heap file.<br><br>
+    <strong>Self-referential ctid:</strong> Normally a tuple's ctid points to itself. But for <strong>HOT update chains</strong>, the old tuple's ctid is updated to point to the new tuple's location — creating a forwarding pointer.<br><br>
+    <strong>Why you should never store ctid in your app:</strong>
+    <ul>
+      <li>VACUUM can reorganize tuples within pages (changing ctid)</li>
+      <li>CLUSTER, VACUUM FULL, pg_repack rewrite the entire table</li>
+      <li>Always use your primary key as a stable row identifier</li>
+    </ul>
+    <div style="margin-top:12px"><span class="tag tag-danger">Never use ctid as a stable row identifier</span><span class="tag tag-ok">Useful for debugging: SELECT ctid, * FROM tbl</span></div>` },
+
+  t_infomask: { color: '#06b6d4', icon: '🏴', title: 'infomask — Tuple Status Flags',
+    body: `<strong>infomask</strong> is a 2-byte bitfield (plus infomask2) packed with flags that tell Postgres about the tuple's state. These are checked constantly during visibility decisions.<br><br>
+    <strong>Key flags:</strong>
+    <ul>
+      <li><code>HEAP_XMIN_COMMITTED</code> — xmin transaction is known committed (caches the lookup)</li>
+      <li><code>HEAP_XMIN_INVALID</code> — xmin transaction aborted; tuple is dead</li>
+      <li><code>HEAP_XMAX_COMMITTED</code> — xmax transaction committed; tuple is dead</li>
+      <li><code>HEAP_XMAX_INVALID</code> — xmax=0 or aborted; tuple is live</li>
+      <li><code>HEAP_UPDATED</code> — this is a newer version of an updated row</li>
+      <li><code>HEAP_HOT_UPDATED</code> — this tuple was updated via HOT</li>
+      <li><code>HEAP_ONLY_TUPLE</code> — this is a HOT tuple (no index points directly to it)</li>
+      <li><code>HEAP_HASOID</code> — tuple has an OID (old Postgres feature)</li>
+    </ul>
+    <br>These flags are cached after the first lookup — Postgres sets the COMMITTED flag after confirming xmin in the commit log (pg_xact), so future visibility checks don't need to re-check pg_xact.
+    <div style="margin-top:12px"><span class="tag tag-info">Performance optimization: cached commit status avoids repeated pg_xact lookups</span></div>` },
+
+  t_natts: { color: '#6366f1', icon: '🔢', title: 'natts — Number of Attributes',
+    body: `A 2-byte integer storing how many columns this tuple has.<br><br>
+    <strong>Why this matters:</strong> When you <code>ALTER TABLE ADD COLUMN</code> with a default value in PostgreSQL 11+, Postgres doesn't rewrite every row. Instead, the new column's default is stored in the catalog, and <code>natts</code> tells Postgres that old tuples have fewer columns than the current schema. When reading an old tuple, Postgres supplies the catalog default for the missing column.<br><br>
+    This is why <strong>ADD COLUMN with DEFAULT is instant in PG11+</strong> — it's a metadata-only operation. Before PG11, it required rewriting every row in the table.
+    <div style="margin-top:12px"><span class="tag tag-ok">PG11+: ADD COLUMN DEFAULT is instant</span><span class="tag tag-warn">Pre-PG11: caused full table rewrite</span></div>` },
+
+  t_hoff: { color: '#ec4899', icon: '↕️', title: 'hoff — Header Offset to User Data',
+    body: `A 1-byte value storing the byte offset from the start of the tuple to the actual column data. This accounts for the fixed header (23 bytes) plus any optional NULL bitmap padding.<br><br>
+    <strong>Why it varies:</strong> The NULL bitmap is only present if at least one column is NULL. Its size is <code>ceil(natts / 8)</code> bytes, rounded up to the nearest byte. The hoff field tells the executor exactly where to start reading column values without computing bitmap size each time.` },
+
+  t_nullbits: { color: '#60a5fa', icon: '∅', title: 'NULL Bitmap — Tracking Which Columns Are NULL',
+    body: `An optional bit array — one bit per column — that tracks which columns contain NULL values.<br><br>
+    <strong>Only present if at least one column is NULL.</strong> If all columns are non-null, this field is omitted entirely (saving space).<br><br>
+    <strong>Storage cost of NULLs:</strong> Contrary to intuition, NULL columns don't save storage space in PostgreSQL the way you might expect. A NULL column still takes 1 bit in the NULL bitmap. But variable-length columns (text, bytea) that are NULL do save their variable storage since no actual data is written for them.<br><br>
+    <strong>Performance note:</strong> <code>IS NULL</code> and <code>IS NOT NULL</code> checks are very fast — just a single bit check in the tuple header. No full column read needed.
+    <div style="margin-top:12px"><span class="tag tag-ok">IS NULL check = 1 bit read, extremely fast</span></div>` },
+
+  t_data: { color: '#94a3b8', icon: '📊', title: 'Actual Row Data — Your Column Values',
+    body: `The actual column data, stored sequentially after the tuple header and NULL bitmap.<br><br>
+    <strong>Fixed-length columns</strong> (int, bigint, bool, timestamp, float, etc.) are stored at their natural alignment — no length prefix needed since the size is known from the schema.<br><br>
+    <strong>Variable-length columns</strong> (text, varchar, bytea, jsonb, arrays) use a <strong>varlena</strong> header:
+    <ul>
+      <li>1-byte header if value ≤ 126 bytes (most short strings)</li>
+      <li>4-byte header for larger values (stores length)</li>
+      <li>If value exceeds ~2KB → TOAST kicks in</li>
+    </ul>
+    <br><strong>Column alignment padding:</strong> Each column is aligned to its type's alignment boundary (e.g., int8 aligns to 8 bytes). If you have a char(1) followed by a bigint, there are 7 bytes of padding. Wide tables with poor column ordering can waste significant space — declare fixed-width types first to minimize padding.
+    <div style="margin-top:12px"><span class="tag tag-info">Tip: order columns by descending alignment size to minimize padding</span></div>` },
+
+  // TOAST
+  toast_small: { color: '#10b981', icon: '✅', title: 'Inline Storage — Small Values Stay in the Main Table',
+    body: `Values smaller than approximately <strong>2KB (¼ of a page)</strong> are stored inline in the main table's heap pages. No TOAST overhead at all.<br><br>
+    This is the ideal case — everything on one page, one I/O read gets you the full row. Most OLTP columns (names, emails, status flags, short descriptions) fall into this category.<br><br>
+    <strong>What "approximately 2KB" means:</strong> The actual threshold is when a tuple would exceed 2000 bytes. At that point, Postgres first tries to compress variable-length columns (EXTENDED strategy). If after compression the tuple still doesn't fit in a page, those columns are moved out-of-line to the TOAST table.
+    <div style="margin-top:12px"><span class="tag tag-ok">No TOAST = fastest possible access</span></div>` },
+
+  toast_large: { color: '#f59e0b', icon: '🍞', title: 'TOAST Pointer — Large Values Live Elsewhere',
+    body: `When a value exceeds the threshold, an <strong>18-byte TOAST pointer</strong> replaces it in the main table row. This pointer contains:<br><br>
+    <ul>
+      <li><strong>va_rawsize</strong> — original uncompressed size</li>
+      <li><strong>va_extsize</strong> — size of the stored (possibly compressed) data</li>
+      <li><strong>va_valueid</strong> — chunk ID in the TOAST table</li>
+      <li><strong>va_toastrelid</strong> — OID of the TOAST table</li>
+    </ul>
+    <br><strong>The performance penalty:</strong> Fetching a TOASTed column requires a second read — Postgres fetches all chunks from the TOAST table, reassembles them, and decompresses if needed. This is transparent to SQL but costs real I/O.<br><br>
+    <strong>Key implication for queries:</strong> <code>SELECT *</code> on a table with TOASTed columns fetches TOAST data for every row. If you only need non-TOASTed columns, always specify column names.
+    <div style="margin-top:12px"><span class="tag tag-warn">SELECT * forces TOAST fetch for every row</span><span class="tag tag-ok">SELECT id, name avoids TOAST entirely if bio is TOASTed</span></div>` },
+
+  toast_chunks: { color: '#f59e0b', icon: '📦', title: 'TOAST Chunks — How Large Values Are Split',
+    body: `Large values are split into fixed-size chunks (default <strong>2000 bytes each</strong>) and stored as separate rows in the TOAST table.<br><br>
+    <strong>TOAST table structure:</strong>
+    <ul>
+      <li><code>chunk_id</code> — groups all chunks belonging to the same value</li>
+      <li><code>chunk_seq</code> — ordering within the value (0, 1, 2...)</li>
+      <li><code>chunk_data</code> — the actual bytes (up to 2000 bytes per chunk)</li>
+    </ul>
+    <br><strong>The TOAST table has its own indexes</strong> on (chunk_id, chunk_seq) so Postgres can efficiently fetch all chunks for a given value in order.<br><br>
+    <strong>Compression:</strong> With EXTENDED strategy, Postgres first tries <strong>pglz compression</strong> (LZ-based, fast). In PG14+, <strong>LZ4</strong> is also available and much faster. If compression doesn't reduce size enough, the value goes out-of-line.
+    <div style="margin-top:12px"><span class="tag tag-info">PG14+: SET default_toast_compression = 'lz4' for faster compression</span></div>` },
+
+  toast_extended: { color: '#10b981', icon: '📗', title: 'EXTENDED — Default TOAST Strategy',
+    body: `<strong>EXTENDED</strong> is the default strategy for <code>text</code>, <code>varchar</code>, <code>bytea</code>, <code>jsonb</code>, and arrays.<br><br>
+    <strong>Process:</strong>
+    <ol style="padding-left:20px;margin-top:8px">
+      <li style="margin-bottom:6px">Try to compress the value inline (pglz or lz4)</li>
+      <li style="margin-bottom:6px">If compressed value fits in ~2KB → store inline (no TOAST overhead)</li>
+      <li style="margin-bottom:6px">If still too large → move compressed value out-of-line to TOAST table</li>
+    </ol>
+    <br>Best for: most text and JSON use cases where you read the full value each time.
+    <div style="margin-top:12px"><span class="tag tag-ok">Default for text, jsonb, bytea</span></div>` },
+
+  toast_external: { color: '#3b82f6', icon: '📘', title: 'EXTERNAL — Out-of-line Without Compression',
+    body: `<strong>EXTERNAL</strong> stores large values out-of-line but skips compression.<br><br>
+    <strong>When to use it:</strong> When you need to do <strong>random access into a large value</strong> — like reading a specific byte range of a large bytea. Compressed data can't be partially decompressed; you'd have to fetch and decompress the entire value just to read a slice.<br><br>
+    With EXTERNAL, Postgres can fetch only the needed chunks from the TOAST table.<br><br>
+    <strong>Example use case:</strong> Storing video frames or binary file data where you'll use <code>substring()</code> to extract portions.
+    <code style="display:block;margin-top:10px;font-size:11px;padding:8px;background:rgba(59,130,246,0.1);border-radius:4px">ALTER TABLE files ALTER COLUMN data SET STORAGE EXTERNAL;</code>
+    <div style="margin-top:12px"><span class="tag tag-ok">Use for binary data needing partial access</span><span class="tag tag-warn">Larger storage than EXTENDED (no compression)</span></div>` },
+
+  toast_main: { color: '#8b5cf6', icon: '📙', title: 'MAIN — Compress Inline, Avoid Out-of-line',
+    body: `<strong>MAIN</strong> tries to keep the value in the main table heap by compressing it inline. It only moves out-of-line as an absolute last resort.<br><br>
+    <strong>Difference from EXTENDED:</strong> EXTENDED happily moves data out-of-line once compression isn't enough. MAIN tries harder to stay inline — it will only move out-of-line if the tuple genuinely cannot fit on any page even after compression.<br><br>
+    <strong>Best for:</strong> Values that compress very well (e.g., repetitive XML, structured text) and are always read in full, where you want to avoid TOAST table lookups.` },
+
+  toast_plain: { color: '#475569', icon: '⬜', title: 'PLAIN — No TOAST Processing',
+    body: `<strong>PLAIN</strong> means absolutely no TOAST processing. The value must fit within a page.<br><br>
+    <strong>Used automatically for:</strong>
+    <ul>
+      <li>Fixed-length types: <code>int</code>, <code>bigint</code>, <code>bool</code>, <code>float</code>, <code>timestamp</code>, <code>uuid</code></li>
+      <li>Any type that cannot be compressed or moved out-of-line by definition</li>
+    </ul>
+    <br>You cannot set PLAIN on <code>text</code> or other variable-length types if rows might exceed page size — Postgres will reject it.
+    <div style="margin-top:12px"><span class="tag tag-ok">Fastest — no overhead whatsoever</span><span class="tag tag-info">Automatic for int, bool, timestamp, uuid, etc.</span></div>` },
+
+  // HOT
+  hot_normal: { color: '#ef4444', icon: '❌', title: 'Normal UPDATE — Index Must Be Updated',
+    body: `When you update an <strong>indexed column</strong>, Postgres must update every index that covers that column — because those indexes store ctids (physical locations) that would be stale after the update.<br><br>
+    <strong>Cost of normal UPDATE:</strong>
+    <ul>
+      <li>Write new tuple to heap (possibly new page)</li>
+      <li>Mark old tuple dead (set xmax)</li>
+      <li>Update all indexes on modified columns (random writes)</li>
+      <li>If table has many indexes, each one needs updating</li>
+    </ul>
+    <br>For a table with 5 indexes on the updated column, a single UPDATE row touches 5 index pages plus the heap page. This is why <strong>index bloat</strong> happens — dead index entries accumulate just like dead heap tuples.
+    <div style="margin-top:12px"><span class="tag tag-danger">High index count = expensive UPDATEs</span><span class="tag tag-warn">Index bloat from dead entries needs VACUUM too</span></div>` },
+
+  hot_hot: { color: '#10b981', icon: '⚡', title: 'HOT Update — No Index Maintenance Needed',
+    body: `<strong>HOT (Heap-Only Tuple)</strong> is an optimization that avoids updating indexes when:<br><br>
+    <ol style="padding-left:20px;margin-top:8px">
+      <li style="margin-bottom:6px">The updated column(s) are <strong>not in any index</strong></li>
+      <li style="margin-bottom:6px">The new tuple fits on the <strong>same page</strong> as the old tuple (free space available)</li>
+    </ol>
+    <br><strong>What happens instead:</strong>
+    <ul>
+      <li>Old item pointer gets <code>LP_REDIRECT</code> flag + points to new item pointer</li>
+      <li>Old tuple gets <code>HEAP_HOT_UPDATED</code> infomask flag</li>
+      <li>New tuple gets <code>HEAP_ONLY_TUPLE</code> flag (no index points directly to it)</li>
+      <li>Indexes still point to old item pointer → follow the redirect chain → find new tuple</li>
+    </ul>
+    <br><strong>Why keep fillfactor low for HOT-friendly tables:</strong> Setting <code>fillfactor = 70</code> on a table with frequent updates leaves 30% free space on pages — more room for HOT new tuples to land on the same page.
+    <code style="display:block;margin-top:10px;font-size:11px;padding:8px;background:rgba(16,185,129,0.1);border-radius:4px">ALTER TABLE users SET (fillfactor = 70); -- Reserve 30% for HOT updates</code>
+    <div style="margin-top:12px"><span class="tag tag-ok">No index writes = much faster</span><span class="tag tag-info">Set fillfactor = 70-80 for update-heavy tables</span></div>` }
+};
+
+// Fix empty duplicate entries
+detailData.pg_tuple2 = detailData.pg_tuple1;
+detailData.pg_tuple3 = detailData.pg_tuple1;
+
+// Offset & ctid details
+detailData.off_itemptr = { color: '#f97316', icon: '🗺️', title: 'Item Pointer — The Bridge Between ctid and Byte Offset',
+  body: `The item pointer (line pointer) is the critical middle layer. It lives at a fixed, predictable position in the page (right after the header, 4 bytes per slot).<br><br>
+  <strong>What it stores (4 bytes total):</strong>
+  <ul>
+    <li><strong>lp_off (15 bits)</strong> — the actual byte offset within the page where the tuple starts</li>
+    <li><strong>lp_len (15 bits)</strong> — the length of the tuple in bytes</li>
+    <li><strong>lp_flags (2 bits)</strong> — state: <code>LP_UNUSED</code> / <code>LP_NORMAL</code> / <code>LP_REDIRECT</code> (HOT) / <code>LP_DEAD</code></li>
+  </ul>
+  <br><strong>Why this middle layer exists:</strong> When VACUUM compacts a page (moving live tuples together), only item pointers need updating — not the potentially thousands of index entries pointing to those tuples. One item pointer update = all indexes automatically find the new location.
+  <div style="margin-top:12px"><span class="tag tag-ok">Moving a tuple = update 1 item pointer, not N index entries</span></div>` };
+
+detailData.off_ctid_page = { color: '#3b82f6', icon: '📄', title: 'ctid — The Page Number Component',
+  body: `The first number in ctid <code>(3, 2)</code> is the <strong>page number</strong> (block number).<br><br>
+  <strong>How Postgres uses it:</strong>
+  <ul>
+    <li>Multiply by 8192 to get the byte position in the heap file</li>
+    <li>Page 0 → byte 0, Page 1 → byte 8192, Page 3 → byte 24,576</li>
+    <li>Direct seek: <code>lseek(fd, page × 8192, SEEK_SET)</code> — no scanning</li>
+  </ul>
+  <br><strong>Max table size:</strong> Page number is 32-bit unsigned → max ~4 billion pages × 8KB = <strong>32TB per table</strong>.
+  <div style="margin-top:12px"><span class="tag tag-info">Max table size = 2³² pages × 8KB = 32TB</span></div>` };
+
+detailData.off_ctid_item = { color: '#f97316', icon: '🔢', title: 'ctid — The Item Pointer Number (NOT a byte offset)',
+  body: `The second number in ctid <code>(3, 2)</code> is the <strong>item pointer slot number</strong> — a 1-based index into the item pointer array. It is <em>not</em> a direct byte offset.<br><br>
+  <strong>What happens at lookup:</strong>
+  <ul>
+    <li>ctid = (3, 2) → go to page 3 → read item_ptr[2]</li>
+    <li>item_ptr[2] says: "offset=7950, length=150"</li>
+    <li>Now skip 7950 bytes into page 3 → your tuple starts here</li>
+  </ul>
+  <br>This two-step process takes microseconds — item pointers are tiny (4 bytes each) and packed right after the page header, so they're always in cache.
+  <div style="margin-top:12px"><span class="tag tag-warn">Slot 2 ≠ byte 2 — it's an array index</span><span class="tag tag-info">Item pointer slots are 1-based</span></div>` };
+
+detailData.off_why_indirect = { color: '#8b5cf6', icon: '💡', title: 'Why Two Levels of Indirection?',
+  body: `<strong>The problem:</strong> VACUUM compacts pages by moving live tuples together. If every index stored raw byte offsets, compacting one page could require updating millions of index entries across multiple indexes.<br><br>
+  <strong>With indirection:</strong>
+  <ol style="padding-left:20px;margin-top:8px">
+    <li style="margin-bottom:8px">Index stores: <code>(page=3, item_ptr=2)</code></li>
+    <li style="margin-bottom:8px">VACUUM moves tuple: byte 7950 → byte 7800</li>
+    <li style="margin-bottom:8px">Only item_ptr[2] is updated: offset 7950 → 7800</li>
+    <li>All indexes still work — they reach the new location via item_ptr[2]</li>
+  </ol>
+  <br>Cost of this indirection: one extra 4-byte read. Benefit: O(1) updates instead of O(indexes × rows moved).
+  <div style="margin-top:12px"><span class="tag tag-ok">Compaction = update item pointers only, indexes untouched</span></div>` };
+
+detailData.off_varsized = { color: '#10b981', icon: '❓', title: 'Why Byte Offsets Instead of Row Numbers?',
+  body: `Row numbers only work when every row is the same size. PostgreSQL rows are <strong>variable-length</strong> — a row with a short name takes ~50 bytes, one with a long bio might take 400 bytes.<br><br>
+  With variable-size rows, "row number 5" has no fixed meaning — you'd have to read rows 1–4 first to know where row 5 starts. That's O(n).<br><br>
+  A <strong>byte offset</strong> is always O(1): seek directly to that byte, no matter what size other rows are.<br><br>
+  Fixed-size storage systems (like some columnar databases) can use row numbers. PostgreSQL's general-purpose heap store uses byte offsets because it handles arbitrary types and sizes.
+  <div style="margin-top:12px"><span class="tag tag-ok">Byte offset = O(1) random access, always</span></div>` };
+
+detailData.off_stable = { color: '#ef4444', icon: '⚠️', title: 'ctid Is NOT Stable — Never Store It',
+  body: `<strong>ctid changes whenever a tuple moves. Never use it as an identifier in your application.</strong><br><br>
+  <strong>Operations that change ctid:</strong>
+  <ul>
+    <li><strong>UPDATE</strong> — new tuple version gets a new ctid</li>
+    <li><strong>VACUUM</strong> — can compact tuples within a page</li>
+    <li><strong>VACUUM FULL</strong> — rewrites entire table, all ctids change</li>
+    <li><strong>CLUSTER</strong> — rewrites table in index order</li>
+    <li><strong>pg_repack</strong> — online table rebuild</li>
+    <li><strong>ALTER TABLE</strong> — some operations rewrite the table</li>
+  </ul>
+  <br><strong>Use instead:</strong> A stable primary key — <code>BIGSERIAL</code>, <code>UUID</code>, or any column you explicitly control.
+  <div style="margin-top:12px"><span class="tag tag-danger">Never store ctid as a foreign key or reference</span><span class="tag tag-ok">Use BIGSERIAL or UUID as stable row identifiers</span></div>` };
+
+detailData.off_inspect = { color: '#3b82f6', icon: '🔍', title: 'How to Inspect ctid and Byte Offsets Yourself',
+  body: `<strong>See ctid in any query:</strong><br>
+  <code style="display:block;margin:8px 0;padding:10px;background:rgba(59,130,246,0.08);border-radius:6px;line-height:1.8">SELECT ctid, xmin, xmax, id, name FROM users LIMIT 5;<br><br>
+  ctid&nbsp; | xmin&nbsp; | xmax | id | name<br>
+  ------+-------+------+----+-------<br>
+  (0,1) | 10423 |&nbsp;&nbsp;&nbsp;&nbsp;0 |&nbsp;&nbsp;1 | Alice<br>
+  (0,2) | 10423 |&nbsp;&nbsp;&nbsp;&nbsp;0 |&nbsp;&nbsp;2 | Bob<br>
+  (3,7) | 10891 |&nbsp;&nbsp;&nbsp;&nbsp;0 |&nbsp;&nbsp;3 | Charlie</code>
+  <strong>See actual byte offsets with pageinspect:</strong><br>
+  <code style="display:block;margin:8px 0;padding:10px;background:rgba(59,130,246,0.08);border-radius:6px;line-height:1.8">CREATE EXTENSION pageinspect;<br>SELECT lp, lp_off, lp_len, lp_flags<br>FROM heap_page_items(get_raw_page('users', 0));<br><br>
+  lp | lp_off | lp_len | lp_flags<br>
+  ---+--------+--------+---------<br>
+  &nbsp;1 |&nbsp;&nbsp;8100 |&nbsp;&nbsp;&nbsp;&nbsp; 92 | 1 (normal)<br>
+  &nbsp;2 |&nbsp;&nbsp;7950 |&nbsp;&nbsp;&nbsp;&nbsp;150 | 1 (normal)<br>
+  &nbsp;3 |&nbsp;&nbsp;7800 |&nbsp;&nbsp;&nbsp;&nbsp;150 | 1 (normal)</code>
+  <div style="margin-top:12px"><span class="tag tag-ok">pageinspect reveals exact byte layout of any page</span></div>` };
+
+function showDetail(key) {
+  const d = detailData[key];
+  if (!d) return;
+  const panel = document.getElementById('detail-panel');
+  const title = document.getElementById('dp-title');
+  const body = document.getElementById('dp-body');
+  panel.style.setProperty('--panel-color', d.color);
+  title.innerHTML = `<span>${d.icon}</span> ${d.title}`;
+  body.innerHTML = d.body;
+  panel.classList.remove('empty');
+  panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+
+  // Highlight active
+  document.querySelectorAll('.page-region.active, .tuple-field.active, .toast-row.active, .pv-seg.active').forEach(e => e.classList.remove('active'));
+  const el = document.getElementById('pr-' + key) || document.getElementById('tf-' + key);
+  if (el) el.classList.add('active');
+}
+
+function clearDetail() {
+  document.getElementById('detail-panel').classList.add('empty');
+  document.getElementById('dp-title').innerHTML = '← Click any component to see details';
+  document.getElementById('dp-body').innerHTML = 'Select any highlighted element above for a detailed explanation.';
+}
+</script>
+</body>
+</html>
