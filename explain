@@ -1,0 +1,1306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PostgreSQL EXPLAIN — Visual Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:       #0b0f1a;
+  --card:     #111827;
+  --card2:    #1a2235;
+  --border:   #1f2d45;
+  --border2:  #2a3f5f;
+  --text:     #e2e8f0;
+  --muted:    #4a6080;
+  --mono:     'Space Mono', monospace;
+  --sans:     'DM Sans', sans-serif;
+
+  --seq:   #e85d3d;
+  --idx:   #22c55e;
+  --bmp:   #f59e0b;
+  --warn:  #f97316;
+  --ok:    #22c55e;
+  --info:  #38bdf8;
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  min-height: 100vh;
+}
+
+.wrap { max-width: 960px; margin: 0 auto; padding: 40px 20px 80px; }
+
+/* header */
+.top-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.2em;
+  color: var(--muted);
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+h1 {
+  font-family: var(--mono);
+  font-size: clamp(22px, 4vw, 38px);
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+  margin-bottom: 8px;
+}
+h1 em { color: var(--info); font-style: normal; }
+.sub {
+  font-size: 14px;
+  color: var(--muted);
+  margin-bottom: 40px;
+  line-height: 1.6;
+}
+
+/* tabs */
+.tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 28px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.tab {
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 8px 18px;
+  cursor: pointer;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--info); border-bottom-color: var(--info); }
+
+.view { display: none; }
+.view.active { display: block; animation: up 0.18s ease; }
+@keyframes up { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+
+/* section title */
+.stitle {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.stitle::after { content:''; flex:1; height:1px; background:var(--border); }
+
+/* explain block — the core component */
+.explain-block {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 16px;
+}
+.explain-query {
+  background: var(--card2);
+  border-bottom: 1px solid var(--border);
+  padding: 12px 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: #7dd3fc;
+  line-height: 1.6;
+}
+.explain-query .kw { color: #c084fc; }
+.explain-query .str { color: #86efac; }
+.explain-output {
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 2;
+  overflow-x: auto;
+}
+
+/* clickable explain lines */
+.eline {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+  cursor: pointer;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: 0 -6px;
+  transition: background 0.12s;
+  flex-wrap: wrap;
+}
+.eline:hover { background: rgba(255,255,255,0.04); }
+.eline.active { background: rgba(56,189,248,0.08); }
+
+.indent-0 { padding-left: 6px; }
+.indent-1 { padding-left: 28px; }
+.indent-2 { padding-left: 52px; }
+.indent-3 { padding-left: 76px; }
+
+/* node type colors */
+.node-seq   { color: var(--seq); font-weight: 700; }
+.node-idx   { color: var(--idx); font-weight: 700; }
+.node-bmp   { color: var(--bmp); font-weight: 700; }
+.node-join  { color: #a78bfa; font-weight: 700; }
+.node-agg   { color: #38bdf8; font-weight: 700; }
+.node-sort  { color: #f472b6; font-weight: 700; }
+.node-limit { color: #94a3b8; font-weight: 700; }
+
+.cost-est { color: #64748b; font-size: 11px; }
+.cost-actual { color: #94a3b8; font-size: 11px; }
+.cost-bad { color: var(--warn); font-size: 11px; font-weight: 700; }
+.cond { color: #e2e8f0; font-size: 11px; }
+.cond-key { color: var(--muted); }
+.removed { color: var(--warn); font-size: 11px; }
+.removed-ok { color: var(--ok); font-size: 11px; }
+.disk-bad { color: #ef4444; font-weight: 700; font-size: 11px; }
+.disk-ok  { color: var(--ok); font-size: 11px; }
+
+/* annotation badge */
+.badge {
+  display: inline-block;
+  font-size: 9px;
+  font-family: var(--mono);
+  padding: 1px 7px;
+  border-radius: 2px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.badge-warn { background: rgba(249,115,22,0.15); color: var(--warn); border: 1px solid rgba(249,115,22,0.3); }
+.badge-ok   { background: rgba(34,197,94,0.12);  color: var(--ok);   border: 1px solid rgba(34,197,94,0.3); }
+.badge-info { background: rgba(56,189,248,0.12); color: var(--info); border: 1px solid rgba(56,189,248,0.3); }
+
+/* detail panel */
+.detail {
+  background: var(--card);
+  border: 1px solid var(--border2);
+  border-left: 3px solid var(--info);
+  border-radius: 6px;
+  padding: 20px 22px;
+  margin-top: 4px;
+  margin-bottom: 20px;
+  transition: border-left-color 0.2s;
+}
+.detail.empty {
+  opacity: 0.35;
+  border-left-color: var(--border);
+}
+.detail h3 {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.detail p {
+  font-size: 13px;
+  color: #8b9ab5;
+  line-height: 1.75;
+  margin-bottom: 10px;
+}
+.detail p:last-child { margin-bottom: 0; }
+.detail strong { color: var(--text); font-weight: 600; }
+.detail code {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: rgba(56,189,248,0.08);
+  color: #7dd3fc;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+.detail .fix {
+  background: rgba(34,197,94,0.07);
+  border: 1px solid rgba(34,197,94,0.2);
+  border-radius: 4px;
+  padding: 10px 12px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: #86efac;
+  line-height: 1.8;
+  margin-top: 10px;
+}
+.tag { display:inline-block; font-size:10px; font-family:var(--mono); padding:2px 8px; border-radius:2px; border:1px solid; margin:3px 2px 0; }
+.t-ok   { color:var(--ok);   border-color:rgba(34,197,94,0.3);   background:rgba(34,197,94,0.07); }
+.t-warn { color:var(--warn); border-color:rgba(249,115,22,0.3);  background:rgba(249,115,22,0.07); }
+.t-bad  { color:#ef4444;     border-color:rgba(239,68,68,0.3);   background:rgba(239,68,68,0.07); }
+.t-info { color:var(--info); border-color:rgba(56,189,248,0.3);  background:rgba(56,189,248,0.07); }
+
+/* scan cards */
+.scan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.scan-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.scan-card:hover, .scan-card.lit {
+  border-color: var(--c);
+  box-shadow: 0 0 20px var(--cg);
+}
+.scan-card-head {
+  padding: 12px 16px 8px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.scan-title { font-family: var(--mono); font-size: 13px; font-weight: 700; color: var(--c); }
+.scan-when  { font-size: 11px; color: var(--muted); margin-left: auto; }
+.scan-body  { padding: 12px 16px; font-size: 12px; color: #64748b; line-height: 1.65; }
+.scan-viz {
+  background: var(--card2);
+  margin: 8px 0;
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: #475569;
+  line-height: 1.8;
+}
+.scan-viz .hi { color: var(--c); }
+.scan-viz .dim { opacity: 0.3; }
+
+/* warning cards */
+.warn-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.warn-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.warn-card:hover, .warn-card.lit { border-color: var(--wc); box-shadow: 0 0 16px var(--wcg); }
+.warn-num { font-family: var(--mono); font-size: 28px; font-weight: 700; color: var(--wc); margin-bottom: 4px; }
+.warn-title { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+.warn-desc { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.warn-snippet {
+  margin-top: 10px;
+  padding: 7px 10px;
+  background: var(--card2);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: #475569;
+  line-height: 1.7;
+}
+.warn-snippet .bad { color: #ef4444; }
+.warn-snippet .good { color: var(--ok); }
+
+/* flow diagram */
+.flow {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-bottom: 20px;
+  overflow-x: auto;
+  padding: 4px 0;
+}
+.flow-step {
+  flex-shrink: 0;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  min-width: 120px;
+}
+.flow-step:hover, .flow-step.lit {
+  border-color: var(--fc);
+  box-shadow: 0 0 16px var(--fcg);
+}
+.flow-icon  { font-size: 20px; margin-bottom: 4px; }
+.flow-label { font-family: var(--mono); font-size: 10px; font-weight: 700; color: var(--fc); }
+.flow-sub   { font-size: 10px; color: var(--muted); margin-top: 3px; }
+.flow-arrow { color: var(--border2); font-size: 20px; padding: 0 6px; flex-shrink: 0; }
+
+/* debug checklist */
+.checklist { margin-bottom: 20px; }
+.check-item {
+  display: flex;
+  gap: 14px;
+  padding: 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+  align-items: flex-start;
+}
+.check-item:hover { border-color: var(--border2); background: var(--card2); }
+.check-item.lit { border-color: var(--info); background: rgba(56,189,248,0.04); }
+.check-num {
+  font-family: var(--mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--info);
+  flex-shrink: 0;
+  line-height: 1;
+  margin-top: 2px;
+  min-width: 28px;
+}
+.check-content { flex: 1; }
+.check-title { font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.check-body  { font-size: 12px; color: var(--muted); line-height: 1.55; }
+.check-look  {
+  font-family: var(--mono);
+  font-size: 10px;
+  margin-top: 7px;
+  padding: 5px 8px;
+  background: var(--bg);
+  border-radius: 3px;
+  color: #475569;
+  line-height: 1.7;
+}
+.check-look .spot { color: var(--warn); }
+.check-look .fix  { color: var(--ok); }
+
+@media (max-width: 600px) {
+  .warn-grid { grid-template-columns: 1fr; }
+  .flow { flex-direction: column; align-items: stretch; }
+  .flow-arrow { transform: rotate(90deg); text-align: center; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="top-label">postgresql · query planning · visual guide</div>
+  <h1>Understanding<br><em>EXPLAIN</em></h1>
+  <p class="sub">Click anything to learn what it means. No jargon, just patterns.</p>
+
+  <!-- TABS -->
+  <div class="tabs">
+    <div class="tab active" onclick="switchTab('how')">How It Works</div>
+    <div class="tab" onclick="switchTab('scans')">Scan Types</div>
+    <div class="tab" onclick="switchTab('read')">Reading Output</div>
+    <div class="tab" onclick="switchTab('warnings')">Warning Signs</div>
+    <div class="tab" onclick="switchTab('debug')">Debug Process</div>
+  </div>
+
+  <!-- ═══════ HOW IT WORKS ═══════ -->
+  <div class="view active" id="view-how">
+
+    <div class="stitle">What happens when you run a query</div>
+
+    <div class="flow">
+      <div class="flow-step" style="--fc:#c084fc;--fcg:rgba(192,132,252,0.2)" onclick="flowDetail('parse')">
+        <div class="flow-icon">📝</div>
+        <div class="flow-label">PARSE</div>
+        <div class="flow-sub">Read the SQL text</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="--fc:#38bdf8;--fcg:rgba(56,189,248,0.2)" onclick="flowDetail('analyze')">
+        <div class="flow-icon">🔍</div>
+        <div class="flow-label">ANALYZE</div>
+        <div class="flow-sub">Check tables & types</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="--fc:#f59e0b;--fcg:rgba(245,158,11,0.2)" onclick="flowDetail('plan')">
+        <div class="flow-icon">🗺️</div>
+        <div class="flow-label">PLAN</div>
+        <div class="flow-sub">Pick the best route</div>
+      </div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step" style="--fc:#22c55e;--fcg:rgba(34,197,94,0.2)" onclick="flowDetail('execute')">
+        <div class="flow-icon">⚡</div>
+        <div class="flow-label">EXECUTE</div>
+        <div class="flow-sub">Actually read rows</div>
+      </div>
+    </div>
+
+    <div class="detail empty" id="detail-how">
+      <h3>← Click a step to understand it</h3>
+      <p>Each stage has a specific job. The PLAN stage is where most interesting decisions happen.</p>
+    </div>
+
+    <div class="stitle">The two commands</div>
+
+    <div class="explain-block">
+      <div class="explain-query">
+        <span class="kw">EXPLAIN</span> <span class="kw">SELECT</span> * <span class="kw">FROM</span> users <span class="kw">WHERE</span> id = <span class="str">42</span>;
+        <br><span style="color:#475569;font-size:10px">-- Shows the plan only. Does NOT run the query.</span>
+      </div>
+      <div class="explain-output">
+        <div class="eline indent-0" onclick="lineDetail('basic_node')">
+          <span class="node-idx">Index Scan</span>&nbsp;
+          <span style="color:#94a3b8">using users_pkey on users</span>&nbsp;
+          <span class="cost-est">(cost=0.43..8.45 rows=1 width=64)</span>
+          <span class="badge badge-ok">fast</span>
+        </div>
+        <div class="eline indent-1" onclick="lineDetail('index_cond')">
+          <span class="cond-key">Index Cond:&nbsp;</span>
+          <span class="cond">(id = 42)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="explain-block">
+      <div class="explain-query">
+        <span class="kw">EXPLAIN ANALYZE</span> <span class="kw">SELECT</span> * <span class="kw">FROM</span> users <span class="kw">WHERE</span> id = <span class="str">42</span>;
+        <br><span style="color:#475569;font-size:10px">-- Actually runs the query. Shows estimate + reality.</span>
+      </div>
+      <div class="explain-output">
+        <div class="eline indent-0" onclick="lineDetail('analyze_node')">
+          <span class="node-idx">Index Scan</span>&nbsp;
+          <span style="color:#94a3b8">using users_pkey on users</span>
+        </div>
+        <div class="eline indent-1" onclick="lineDetail('cost_line')">
+          <span class="cost-est">(cost=0.43..8.45 rows=1 width=64)</span>&nbsp;
+          <span class="badge badge-info">estimate</span>
+        </div>
+        <div class="eline indent-1" onclick="lineDetail('actual_line')">
+          <span class="cost-actual">(actual time=0.031..0.034 rows=1 loops=1)</span>&nbsp;
+          <span class="badge badge-ok">reality</span>
+        </div>
+        <div class="eline indent-1" onclick="lineDetail('index_cond')">
+          <span class="cond-key">Index Cond:&nbsp;</span>
+          <span class="cond">(id = 42)</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail empty" id="detail-how2">
+      <h3>← Click any line in the output above</h3>
+      <p>Every piece of that output has a specific meaning.</p>
+    </div>
+
+  </div>
+
+  <!-- ═══════ SCANS ═══════ -->
+  <div class="view" id="view-scans">
+    <div class="stitle">The three scan types you'll see most</div>
+
+    <div class="scan-grid">
+
+      <div class="scan-card" style="--c:var(--seq);--cg:rgba(232,93,61,0.2)" onclick="scanDetail('seq')">
+        <div class="scan-card-head">
+          <span style="font-size:20px">📚</span>
+          <span class="scan-title">Seq Scan</span>
+          <span class="scan-when">reads everything</span>
+        </div>
+        <div class="scan-body">
+          Reads every single row in the table. Like reading a whole book to find one word.
+          <div class="scan-viz">
+            page 1 <span class="hi">████</span> → check<br>
+            page 2 <span class="hi">████</span> → check<br>
+            page 3 <span class="hi">████</span> → check<br>
+            page 4 <span class="hi">████</span> → <span style="color:#22c55e">found!</span>
+          </div>
+          Not always bad — fast for small tables or when returning most rows.
+        </div>
+      </div>
+
+      <div class="scan-card" style="--c:var(--idx);--cg:rgba(34,197,94,0.2)" onclick="scanDetail('idx')">
+        <div class="scan-card-head">
+          <span style="font-size:20px">🎯</span>
+          <span class="scan-title">Index Scan</span>
+          <span class="scan-when">jumps to rows</span>
+        </div>
+        <div class="scan-body">
+          Uses the index to jump directly to matching rows. Like using a book's index page.
+          <div class="scan-viz">
+            index: id=42 <span class="hi">→ page 4, slot 7</span><br>
+            <span class="dim">page 1 ████ (skipped)</span><br>
+            <span class="dim">page 2 ████ (skipped)</span><br>
+            page 4 <span class="hi">→ slot 7 → found!</span>
+          </div>
+          Best for selective queries returning few rows.
+        </div>
+      </div>
+
+      <div class="scan-card" style="--c:var(--bmp);--cg:rgba(245,158,11,0.2)" onclick="scanDetail('bmp')">
+        <div class="scan-card-head">
+          <span style="font-size:20px">🗺️</span>
+          <span class="scan-title">Bitmap Heap Scan</span>
+          <span class="scan-when">middle ground</span>
+        </div>
+        <div class="scan-body">
+          First marks which pages to visit, then reads them in order. Two-step approach.
+          <div class="scan-viz">
+            step 1: build bitmap of pages<br>
+            &nbsp;&nbsp;→ <span class="hi">page 2, page 4, page 7</span><br>
+            step 2: read marked pages<br>
+            &nbsp;&nbsp;→ <span class="hi">found 5000 matching rows</span>
+          </div>
+          Best for moderate result sets — not too few, not too many.
+        </div>
+      </div>
+
+    </div>
+
+    <div class="detail empty" id="detail-scans">
+      <h3>← Click a scan type to learn more</h3>
+      <p>Each scan type is best in different situations.</p>
+    </div>
+
+    <div class="stitle">When does each appear?</div>
+
+    <div class="explain-block">
+      <div class="explain-output" style="padding: 12px 16px">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:10px;letter-spacing:0.1em">CLICK A ROW TO SEE WHEN THE PLANNER CHOOSES EACH SCAN</div>
+
+        <div class="eline indent-0" onclick="whenDetail('when_seq')" style="margin-bottom:6px">
+          <span class="node-seq">Seq Scan</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:10px">on orders — no index, or returning many rows</span>
+        </div>
+
+        <div class="eline indent-0" onclick="whenDetail('when_idx')" style="margin-bottom:6px">
+          <span class="node-idx">Index Scan</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:10px">using idx_email — returning very few rows</span>
+        </div>
+
+        <div class="eline indent-0" onclick="whenDetail('when_bmp')" style="margin-bottom:6px">
+          <span class="node-bmp">Bitmap Heap Scan</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:10px">on orders — returning moderate number of rows</span>
+        </div>
+
+        <div class="eline indent-1" onclick="whenDetail('when_bmp')" style="margin-bottom:6px">
+          <span style="color:var(--muted)">→&nbsp;</span>
+          <span class="node-bmp">Bitmap Index Scan</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:6px">on idx_status — building the page map</span>
+        </div>
+
+        <div class="eline indent-0" onclick="whenDetail('when_ios')">
+          <span class="node-idx" style="color:#22d3ee">Index Only Scan</span>
+          <span style="font-size:11px;color:var(--muted);margin-left:10px">— all needed columns are in the index</span>
+          <span class="badge badge-ok">fastest</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail empty" id="detail-when">
+      <h3>← Click a scan type above</h3>
+      <p>The planner chooses based on estimated row count and available indexes.</p>
+    </div>
+
+  </div>
+
+  <!-- ═══════ READING OUTPUT ═══════ -->
+  <div class="view" id="view-read">
+    <div class="stitle">A real multi-step plan — click every line</div>
+
+    <div class="explain-block">
+      <div class="explain-query">
+        <span class="kw">EXPLAIN ANALYZE</span><br>
+        <span class="kw">SELECT</span> u.name, <span class="kw">count</span>(o.id)<br>
+        <span class="kw">FROM</span> users u <span class="kw">JOIN</span> orders o <span class="kw">ON</span> o.user_id = u.id<br>
+        <span class="kw">WHERE</span> u.status = <span class="str">'active'</span><br>
+        <span class="kw">GROUP BY</span> u.name <span class="kw">ORDER BY</span> count <span class="kw">DESC LIMIT</span> <span class="str">10</span>;
+      </div>
+      <div class="explain-output">
+
+        <div class="eline indent-0" onclick="readDetail('r_limit')">
+          <span class="node-limit">Limit</span>
+          <span class="cost-est">&nbsp;(cost=1842..1842 rows=10 width=44)</span>
+          <span class="cost-actual">&nbsp;(actual time=18.4..18.4 rows=10 loops=1)</span>
+          <span class="badge badge-ok">top of tree</span>
+        </div>
+
+        <div class="eline indent-1" onclick="readDetail('r_sort')">
+          <span class="node-sort">→ Sort</span>
+          <span class="cost-est">&nbsp;(cost=1842..1867 rows=10000)</span>
+          <span class="cost-actual">&nbsp;(actual time=18.4..18.4 rows=10)</span>
+        </div>
+        <div class="eline indent-2" onclick="readDetail('r_sort')">
+          <span class="cond-key">Sort Key:&nbsp;</span>
+          <span class="cond">count(o.id) DESC</span>
+        </div>
+        <div class="eline indent-2" onclick="readDetail('r_sort_method')">
+          <span class="cond-key">Sort Method:&nbsp;</span>
+          <span class="disk-ok">quicksort&nbsp;</span>
+          <span class="disk-ok">Memory: 1056kB</span>
+          <span class="badge badge-ok">in memory ✓</span>
+        </div>
+
+        <div class="eline indent-1" onclick="readDetail('r_agg')">
+          <span class="node-agg">→→ HashAggregate</span>
+          <span class="cost-est">&nbsp;(cost=1542..1642 rows=10000)</span>
+          <span class="cost-actual">&nbsp;(actual time=15.2..17.9 rows=9821)</span>
+        </div>
+        <div class="eline indent-2" onclick="readDetail('r_agg')">
+          <span class="cond-key">Group Key:&nbsp;</span>
+          <span class="cond">u.name</span>
+        </div>
+
+        <div class="eline indent-1" onclick="readDetail('r_join')">
+          <span class="node-join">→→→ Hash Join</span>
+          <span class="cost-est">&nbsp;(cost=450..1417 rows=50000)</span>
+          <span class="cost-actual">&nbsp;(actual time=4.2..12.3 rows=49823)</span>
+        </div>
+        <div class="eline indent-2" onclick="readDetail('r_join_cond')">
+          <span class="cond-key">Hash Cond:&nbsp;</span>
+          <span class="cond">(o.user_id = u.id)</span>
+        </div>
+        <div class="eline indent-2" onclick="readDetail('r_buffers')">
+          <span class="cond-key">Buffers:&nbsp;</span>
+          <span class="cond">shared hit=892 read=143</span>
+          <span class="badge badge-info">cache stats</span>
+        </div>
+
+        <div class="eline indent-2" onclick="readDetail('r_seqscan_orders')">
+          <span class="node-seq">→→→→ Seq Scan</span>
+          <span style="color:#94a3b8">&nbsp;on orders</span>
+          <span class="cost-actual">&nbsp;(actual time=0.02..5.4 rows=50000)</span>
+        </div>
+
+        <div class="eline indent-2" onclick="readDetail('r_hash_build')">
+          <span class="node-join">→→→→ Hash</span>
+          <span class="cost-actual">&nbsp;(actual time=3.8..3.8 rows=5621)</span>
+        </div>
+        <div class="eline indent-3" onclick="readDetail('r_hash_stats')">
+          <span class="cond-key">Buckets: </span><span class="cond">8192</span>
+          <span class="cond-key">&nbsp;Batches: </span><span class="cost-actual">1</span>
+          <span class="cond-key">&nbsp;Memory: </span><span class="cost-actual">521kB</span>
+          <span class="badge badge-ok">fits in RAM ✓</span>
+        </div>
+
+        <div class="eline indent-3" onclick="readDetail('r_seqscan_users')">
+          <span class="node-seq">→→→→→ Seq Scan</span>
+          <span style="color:#94a3b8">&nbsp;on users</span>
+          <span class="cost-actual">&nbsp;(actual time=0.01..2.9 rows=5621)</span>
+        </div>
+        <div class="eline indent-3" onclick="readDetail('r_filter')">
+          <span class="cond-key">Filter:&nbsp;</span>
+          <span class="cond">(status = 'active')</span>
+        </div>
+        <div class="eline indent-3" onclick="readDetail('r_removed')">
+          <span class="cond-key">Rows Removed by Filter:&nbsp;</span>
+          <span class="removed">4379</span>
+          <span class="badge badge-warn">wasted work</span>
+        </div>
+
+        <div style="padding: 8px 6px; font-family:var(--mono); font-size:11px; color:#475569; margin-top:4px">
+          Planning Time: 0.842 ms &nbsp;|&nbsp; Execution Time: 18.651 ms
+        </div>
+
+      </div>
+    </div>
+
+    <div class="detail empty" id="detail-read">
+      <h3>← Click any line in the plan above</h3>
+      <p>Every line tells you something. Start from the bottom — that's where execution starts.</p>
+    </div>
+
+  </div>
+
+  <!-- ═══════ WARNINGS ═══════ -->
+  <div class="view" id="view-warnings">
+    <div class="stitle">The 4 warning signs to look for</div>
+
+    <div class="warn-grid">
+
+      <div class="warn-card" style="--wc:#f97316;--wcg:rgba(249,115,22,0.15)" onclick="warnDetail('w_estimate')">
+        <div class="warn-num">① </div>
+        <div class="warn-title">Estimate ≠ Reality</div>
+        <div class="warn-desc">Planner thought 50 rows, got 48,000. Wrong estimate = wrong plan choice.</div>
+        <div class="warn-snippet">
+          rows=<span class="bad">50</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;← planner thinks<br>
+          actual rows=<span class="bad">48293</span>&nbsp;← reality<br>
+          <span class="good">Fix: ANALYZE tablename;</span>
+        </div>
+      </div>
+
+      <div class="warn-card" style="--wc:#ef4444;--wcg:rgba(239,68,68,0.15)" onclick="warnDetail('w_removed')">
+        <div class="warn-num">②</div>
+        <div class="warn-title">Rows Removed by Filter</div>
+        <div class="warn-desc">Seq Scan read 1M rows, returned 1. All that work wasted.</div>
+        <div class="warn-snippet">
+          Seq Scan on orders<br>
+          &nbsp;&nbsp;Filter: (user_id = 42)<br>
+          &nbsp;&nbsp;Rows Removed: <span class="bad">999999</span><br>
+          <span class="good">Fix: CREATE INDEX ON orders(user_id);</span>
+        </div>
+      </div>
+
+      <div class="warn-card" style="--wc:#e879f9;--wcg:rgba(232,121,249,0.15)" onclick="warnDetail('w_disk')">
+        <div class="warn-num">③</div>
+        <div class="warn-title">Spilled to Disk</div>
+        <div class="warn-desc">Sort or hash ran out of memory. Disk is 10–100× slower than RAM.</div>
+        <div class="warn-snippet">
+          Sort Method: <span class="bad">external merge</span><br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="bad">Disk: 16384kB</span><br>
+          <span class="good">Fix: SET work_mem = '256MB';</span>
+        </div>
+      </div>
+
+      <div class="warn-card" style="--wc:#f59e0b;--wcg:rgba(245,158,11,0.15)" onclick="warnDetail('w_loops')">
+        <div class="warn-num">④</div>
+        <div class="warn-title">loops × time</div>
+        <div class="warn-desc">0.05ms × 10,000 loops = 500ms hidden in one innocent line.</div>
+        <div class="warn-snippet">
+          actual time=0.05..0.05<br>
+          &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;loops=<span class="bad">10000</span><br>
+          <span class="good">Real cost: 0.05 × 10000 = 500ms</span>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="detail empty" id="detail-warn">
+      <h3>← Click a warning to understand it</h3>
+      <p>Spotting these four patterns covers 80% of slow query problems.</p>
+    </div>
+
+    <div class="stitle">Good vs bad — same query, different situations</div>
+
+    <div class="explain-block">
+      <div class="explain-query">Good plan — estimates match, no wasted work</div>
+      <div class="explain-output">
+        <div class="eline indent-0" onclick="compareDetail('good_idx')">
+          <span class="node-idx">Index Scan</span>
+          <span style="color:#94a3b8">&nbsp;using idx_email on users</span>
+          <span class="badge badge-ok">good</span>
+        </div>
+        <div class="eline indent-1" onclick="compareDetail('good_rows')">
+          <span class="cost-est">(cost=0.43..8.45 rows=1 width=64)</span>&nbsp;
+          <span class="cost-actual">(actual rows=1 loops=1)</span>
+          <span class="badge badge-ok">estimate matches ✓</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="explain-block">
+      <div class="explain-query">Bad plan — massive estimate mismatch, all rows thrown away</div>
+      <div class="explain-output">
+        <div class="eline indent-0" onclick="compareDetail('bad_seq')">
+          <span class="node-seq">Seq Scan</span>
+          <span style="color:#94a3b8">&nbsp;on users</span>
+          <span class="badge badge-warn">investigate</span>
+        </div>
+        <div class="eline indent-1" onclick="compareDetail('bad_rows')">
+          <span class="cost-est">(cost=0.00..420 rows=<span style="color:var(--warn)">50</span> width=64)</span>&nbsp;
+          <span class="cost-actual">(actual rows=<span style="color:#ef4444">48293</span> loops=1)</span>
+          <span class="badge badge-warn">966× off !</span>
+        </div>
+        <div class="eline indent-1" onclick="compareDetail('bad_removed')">
+          <span class="cond-key">Filter:&nbsp;</span><span class="cond">(email = 'alice@example.com')</span>
+        </div>
+        <div class="eline indent-1" onclick="compareDetail('bad_removed')">
+          <span class="cond-key">Rows Removed by Filter:&nbsp;</span>
+          <span class="removed">48292</span>
+          <span class="badge badge-warn">all wasted!</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail empty" id="detail-compare">
+      <h3>← Click a line in the good/bad plans above</h3>
+      <p>Comparing good and bad plans side by side trains your eye quickly.</p>
+    </div>
+
+  </div>
+
+  <!-- ═══════ DEBUG ═══════ -->
+  <div class="view" id="view-debug">
+    <div class="stitle">The debugging process — 5 steps, in order</div>
+
+    <div class="checklist">
+      <div class="check-item" onclick="debugDetail('d1')">
+        <div class="check-num">1</div>
+        <div class="check-content">
+          <div class="check-title">Run EXPLAIN ANALYZE</div>
+          <div class="check-body">Always use ANALYZE — plain EXPLAIN hides reality. Add BUFFERS for cache stats.</div>
+          <div class="check-look"><span class="fix">EXPLAIN (ANALYZE, BUFFERS) SELECT ...;</span></div>
+        </div>
+      </div>
+      <div class="check-item" onclick="debugDetail('d2')">
+        <div class="check-num">2</div>
+        <div class="check-content">
+          <div class="check-title">Find the slowest node</div>
+          <div class="check-body">Look at actual time on each node. The biggest number is your bottleneck.</div>
+          <div class="check-look">
+            <span class="spot">Seq Scan (actual time=0.02..5.40 rows=50000)</span>  ← this one<br>
+            Index Scan (actual time=0.03..0.03 rows=1)  ← fine
+          </div>
+        </div>
+      </div>
+      <div class="check-item" onclick="debugDetail('d3')">
+        <div class="check-num">3</div>
+        <div class="check-content">
+          <div class="check-title">Check estimate vs actual rows</div>
+          <div class="check-body">If off by more than 10×, your statistics are stale. Fix that first before anything else.</div>
+          <div class="check-look">
+            <span class="spot">rows=50 → actual rows=48293</span>  ← stale stats<br>
+            <span class="fix">ANALYZE tablename;</span>
+          </div>
+        </div>
+      </div>
+      <div class="check-item" onclick="debugDetail('d4')">
+        <div class="check-num">4</div>
+        <div class="check-content">
+          <div class="check-title">Look for Rows Removed by Filter</div>
+          <div class="check-body">Large numbers mean work being done and thrown away. An index would eliminate this.</div>
+          <div class="check-look">
+            <span class="spot">Rows Removed by Filter: 999999</span>  ← needs index<br>
+            <span class="fix">CREATE INDEX ON table (column);</span>
+          </div>
+        </div>
+      </div>
+      <div class="check-item" onclick="debugDetail('d5')">
+        <div class="check-num">5</div>
+        <div class="check-content">
+          <div class="check-title">Check for disk spills and high loops</div>
+          <div class="check-body">Disk sort or hash batches &gt; 1 means work_mem is too low. Loops × time reveals hidden cost.</div>
+          <div class="check-look">
+            <span class="spot">Sort Method: external merge  Disk: 16384kB</span><br>
+            <span class="spot">actual time=0.05 loops=10000</span>  → 500ms total<br>
+            <span class="fix">SET work_mem = '256MB';</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail empty" id="detail-debug">
+      <h3>← Click a step to understand it deeply</h3>
+      <p>Follow these steps in order every time. They cover the vast majority of slow queries.</p>
+    </div>
+
+    <div class="stitle">Quick reference — the EXPLAIN options</div>
+
+    <div class="explain-block">
+      <div class="explain-output" style="line-height:2.2">
+        <div class="eline indent-0" onclick="optDetail('opt_basic')">
+          <span class="kw" style="color:#c084fc">EXPLAIN</span>
+          <span style="color:#94a3b8">&nbsp;SELECT ...;</span>
+          <span class="badge badge-info">no execution</span>
+        </div>
+        <div class="eline indent-0" onclick="optDetail('opt_analyze')">
+          <span class="kw" style="color:#c084fc">EXPLAIN ANALYZE</span>
+          <span style="color:#94a3b8">&nbsp;SELECT ...;</span>
+          <span class="badge badge-ok">runs query, shows real times</span>
+        </div>
+        <div class="eline indent-0" onclick="optDetail('opt_buffers')">
+          <span class="kw" style="color:#c084fc">EXPLAIN (ANALYZE, BUFFERS)</span>
+          <span style="color:#94a3b8">&nbsp;SELECT ...;</span>
+          <span class="badge badge-ok">best for debugging</span>
+        </div>
+        <div class="eline indent-0" onclick="optDetail('opt_dml')">
+          <span class="kw" style="color:#c084fc">BEGIN; EXPLAIN ANALYZE</span>
+          <span style="color:#94a3b8">&nbsp;DELETE ...; </span>
+          <span class="kw" style="color:#c084fc">ROLLBACK;</span>
+          <span class="badge badge-warn">for writes — rollback after!</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail empty" id="detail-opts">
+      <h3>← Click an option to learn when to use it</h3>
+    </div>
+
+  </div>
+
+</div><!-- /wrap -->
+
+<script>
+// ── TAB SWITCHING ──
+const tabMap = { how:0, scans:1, read:2, warnings:3, debug:4 };
+function switchTab(name) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('view-' + name).classList.add('active');
+  document.querySelectorAll('.tab')[tabMap[name]].classList.add('active');
+}
+
+// ── DETAIL HELPER ──
+function setDetail(id, color, icon, title, body) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.borderLeftColor = color;
+  el.classList.remove('empty');
+  el.innerHTML = `<h3><span>${icon}</span> ${title}</h3>${body}`;
+  el.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
+// ── HOW IT WORKS ──
+const flowData = {
+  parse: ['#c084fc','📝','Parse — Reading Your SQL',
+    `<p>PostgreSQL reads the raw SQL text and checks that it's syntactically valid. It converts the text into an internal tree structure representing the query's intent.</p>
+    <p>If you have a typo like <code>SELET</code> instead of <code>SELECT</code>, the error happens here. This step is fast — just text processing.</p>`],
+  analyze: ['#38bdf8','🔍','Analyze — Checking Tables & Types',
+    `<p>PostgreSQL resolves your table names and column names against the system catalog. It checks that <code>users.email</code> actually exists and has the right type.</p>
+    <p>Views are expanded here — if you query a view, it gets replaced by the underlying SELECT. This is also where permission checks happen.</p>`],
+  plan: ['#f59e0b','🗺️','Plan — Choosing the Best Route',
+    `<p><strong>This is the interesting step.</strong> The planner generates multiple ways to execute the query and estimates the cost of each. Then picks the cheapest.</p>
+    <p>It uses statistics about your data (stored in <code>pg_stats</code>) to estimate how many rows each step will produce. If those statistics are stale, it picks the wrong plan.</p>
+    <p><strong>This is what EXPLAIN shows you</strong> — the plan the planner chose.</p>`],
+  execute: ['#22c55e','⚡','Execute — Actually Running the Plan',
+    `<p>The chosen plan is handed to the executor, which reads actual data pages, applies filters, joins tables, and returns rows to you.</p>
+    <p><strong>EXPLAIN ANALYZE</strong> runs this step and adds actual timing and row counts alongside the planner's estimates — so you can see where the plan was right or wrong.</p>`],
+};
+function flowDetail(key) {
+  const [color,icon,title,body] = flowData[key];
+  setDetail('detail-how', color, icon, title, body);
+  document.querySelectorAll('.flow-step').forEach(e=>e.classList.remove('lit'));
+  event.currentTarget.classList.add('lit');
+}
+
+// ── EXPLAIN LINES ──
+const lineData = {
+  basic_node: ['#22c55e','🎯','Index Scan — PostgreSQL chose the index',
+    `<p>This means PostgreSQL is using the <code>users_pkey</code> (primary key) index to find the row with id=42 directly, rather than reading every row in the table.</p>
+    <p>For a lookup by primary key, this is exactly what you want. It will do 3–4 page reads regardless of how big the table is.</p>
+    <span class="tag t-ok">Good plan for point lookups</span>`],
+  index_cond: ['#38bdf8','🔎','Index Cond — The condition applied in the index',
+    `<p><strong>Index Cond</strong> is the filter applied while traversing the index itself. Only rows matching this condition have their ctid extracted — so no heap pages are read for non-matching rows.</p>
+    <p>Compare this to <strong>Filter</strong> (without "Index") which is applied <em>after</em> fetching from the heap — meaning those rows were read from disk and then discarded.</p>
+    <span class="tag t-ok">Index Cond = efficient</span><span class="tag t-warn">Filter = rows fetched then discarded</span>`],
+  cost_line: ['#64748b','💰','cost=X..Y — The planner\'s estimate',
+    `<p>These are not milliseconds — they're abstract units. <strong>1.0 = cost of reading one page sequentially.</strong></p>
+    <p><strong>First number (0.43)</strong> — startup cost. Work done before the first row can be returned. High for sorts and aggregations.</p>
+    <p><strong>Second number (8.45)</strong> — total cost to return all rows.</p>
+    <p>Only useful for comparing two plans — bigger number = planner thinks it's more expensive.</p>`],
+  actual_line: ['#94a3b8','⏱️','actual time=X..Y — What really happened',
+    `<p>These <strong>are</strong> milliseconds. Shows how long this node actually took when the query ran.</p>
+    <p><strong>First number</strong> — time until first row was returned.</p>
+    <p><strong>Second number</strong> — time to return all rows.</p>
+    <p><strong>rows=1</strong> — how many rows this node actually returned.</p>
+    <p><strong>loops=1</strong> — how many times this node ran. In nested loop joins, this can be very high.</p>
+    <span class="tag t-info">Always compare rows estimate vs actual rows</span>`],
+  analyze_node: ['#22c55e','🌳','The node type — what operation is happening',
+    `<p>The first word of each line tells you what operation is being performed at this step in the plan. Common ones:</p>
+    <p><strong>Index Scan</strong> — use index, fetch heap rows<br>
+    <strong>Seq Scan</strong> — read whole table<br>
+    <strong>Hash Join</strong> — join using hash table<br>
+    <strong>HashAggregate</strong> — GROUP BY using hash<br>
+    <strong>Sort</strong> — ORDER BY<br>
+    <strong>Limit</strong> — LIMIT clause</p>`],
+};
+function lineDetail(key) {
+  const [c,i,t,b] = lineData[key];
+  setDetail('detail-how2', c, i, t, b);
+  document.querySelectorAll('.eline.active').forEach(e=>e.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+}
+
+// ── SCANS ──
+const scanData = {
+  seq: ['#e85d3d','📚','Seq Scan — Reading Everything',
+    `<p>PostgreSQL reads every page of the table from start to finish. Every row is checked against the filter condition.</p>
+    <p><strong>When it's the right choice:</strong></p>
+    <p>• The table is small (a few thousand rows — just read it all)<br>
+    • The query returns a large fraction of the table (say, 30%+ of rows)<br>
+    • No suitable index exists</p>
+    <p><strong>When it's a problem:</strong> Seq Scan on a large table with a very selective filter — you're reading millions of rows to find one.</p>
+    <div class="fix">Look for: Seq Scan + high "Rows Removed by Filter"</div>`],
+  idx: ['#22c55e','🎯','Index Scan — Jumping to the Right Rows',
+    `<p>PostgreSQL traverses the B-Tree index to find matching entries (ctids), then fetches each heap row directly using those ctids. Random I/O — one disk seek per row.</p>
+    <p><strong>When it's the right choice:</strong></p>
+    <p>• Query is highly selective (returning &lt;10% of rows)<br>
+    • An index exists on the filter column<br>
+    • Fetching a small number of rows</p>
+    <p><strong>When it becomes a problem:</strong> Returning many rows via Index Scan causes many random page reads. At some threshold (usually 5–15% of rows), sequential scan becomes faster.</p>
+    <span class="tag t-ok">Best for: point lookups, highly selective filters</span>`],
+  bmp: ['#f59e0b','🗺️','Bitmap Heap Scan — The Smart Middle Ground',
+    `<p>A two-phase approach:<br><br>
+    <strong>Phase 1 (Bitmap Index Scan):</strong> Scans the index and builds an in-memory bitmap of which pages contain matching rows. Doesn't fetch any heap rows yet.<br><br>
+    <strong>Phase 2 (Bitmap Heap Scan):</strong> Reads only the flagged pages, in physical order (efficient sequential-ish I/O).</p>
+    <p>This avoids the worst of random I/O while still using the index to skip irrelevant pages.</p>
+    <p><strong>Recheck Cond:</strong> If the bitmap grows too large (exceeds work_mem), it becomes "lossy" — it only tracks pages, not individual rows. PostgreSQL must then recheck each row. Increase work_mem to avoid this.</p>
+    <span class="tag t-info">Best for: moderate result sets — 1% to 20% of table</span>`],
+};
+function scanDetail(key) {
+  const [c,i,t,b] = scanData[key];
+  setDetail('detail-scans', c, i, t, b);
+  document.querySelectorAll('.scan-card.lit').forEach(e=>e.classList.remove('lit'));
+  event.currentTarget.classList.add('lit');
+}
+
+const whenData = {
+  when_seq: ['#e85d3d','📚','When Planner Chooses Seq Scan',
+    `<p>The planner chooses Seq Scan when it estimates the cost of a sequential read is lower than an index scan. This happens when:</p>
+    <p><strong>1. No index exists</strong> — no choice but to scan.<br>
+    <strong>2. High selectivity</strong> — if 80% of rows match the filter, sequential I/O beats random I/O.<br>
+    <strong>3. Small table</strong> — a table with 100 rows fits in a page or two. No index needed.<br>
+    <strong>4. Stale statistics</strong> — planner thinks only 50 rows match when really 50,000 do.</p>
+    <div class="fix">Check: EXPLAIN ANALYZE shows rows=50 but actual rows=50000 → run ANALYZE</div>`],
+  when_idx: ['#22c55e','🎯','When Planner Chooses Index Scan',
+    `<p>Planner chooses Index Scan when it estimates that few rows match, making the random I/O of index traversal + heap fetch cheaper than reading all pages sequentially.</p>
+    <p>The crossover point is roughly <strong>5–15% of the table</strong>. Below that → Index Scan. Above that → Seq Scan or Bitmap Heap Scan.</p>
+    <p><strong>The planner can get this wrong</strong> if statistics are stale. It might use Index Scan thinking 10 rows match, when 500,000 do — causing thousands of random I/Os that are slower than a sequential scan would have been.</p>`],
+  when_bmp: ['#f59e0b','🗺️','When Planner Chooses Bitmap Heap Scan',
+    `<p>Bitmap Heap Scan is chosen when the estimated row count is in the "middle" range — too many for efficient Index Scan random I/O, too few to justify a full sequential scan.</p>
+    <p>You'll also see it when <strong>two indexes are combined</strong> for one query:</p>
+    <div class="fix">BitmapAnd
+  → Bitmap Index Scan on idx_status   (status='active')
+  → Bitmap Index Scan on idx_country  (country='US')
+
+Two separate indexes combined — impossible with Index Scan!</div>`],
+  when_ios: ['#22d3ee','⚡','Index Only Scan — The Fastest Path',
+    `<p>When all the columns you're SELECTing are already stored in the index, PostgreSQL can answer the query entirely from the index — it never touches the heap (the actual table pages).</p>
+    <p>This requires either:<br>
+    • All SELECT columns are B-Tree key columns<br>
+    • You used <code>INCLUDE (col)</code> to add non-key columns to the index</p>
+    <div class="fix">-- Enable index-only scans:
+CREATE INDEX ON orders (customer_id) INCLUDE (total_amount);
+SELECT customer_id, total_amount FROM orders WHERE customer_id = 42;
+-- → Index Only Scan, Heap Fetches: 0</div>
+    <p><strong>Heap Fetches: 0</strong> in the output means it worked perfectly. Non-zero means some pages weren't marked all-visible yet (VACUUM fixes this).</p>
+    <span class="tag t-ok">Zero heap reads = maximum possible speed</span>`],
+};
+function whenDetail(key) {
+  const [c,i,t,b] = whenData[key];
+  setDetail('detail-when', c, i, t, b);
+  document.querySelectorAll('.eline.active').forEach(e=>e.classList.remove('active'));
+  event.currentTarget.classList.add('active');
+}
+
+// ── READ OUTPUT ──
+const readData = {
+  r_limit: ['#94a3b8','🔝','Limit — Top of the Tree',
+    `<p>The plan is read <strong>bottom-up</strong> — the innermost nodes run first and feed their results upward. Limit is at the top because it's the last thing applied.</p>
+    <p>The tree structure means: Limit gets rows from Sort, Sort gets rows from HashAggregate, HashAggregate gets rows from Hash Join, and so on down to the two Seq Scans at the bottom.</p>
+    <p>When looking for bottlenecks, find the node with the highest <code>actual time</code> — that's where the most work is happening.</p>`],
+  r_sort: ['#f472b6','📊','Sort — ORDER BY',
+    `<p>This node sorts the aggregated results by <code>count(o.id) DESC</code>. The Sort Key line tells you what it's sorting by.</p>
+    <p>Key things to check on Sort nodes:<br>
+    <strong>Sort Method: quicksort Memory: 1056kB</strong> ← good, fits in memory<br>
+    <strong>Sort Method: external merge  Disk: 16384kB</strong> ← bad, spilled to disk</p>`],
+  r_sort_method: ['#22c55e','✅','Sort Method: quicksort — In-Memory Sort',
+    `<p><strong>quicksort Memory: 1056kB</strong> means the sort fit entirely in RAM. This is fast.</p>
+    <p>If you see <strong>external merge Disk: N kB</strong> instead, the sort exceeded <code>work_mem</code> and had to use disk — typically 10–100× slower.</p>
+    <div class="fix">-- Fix a disk sort:
+SET work_mem = '256MB';  -- per session
+-- or in postgresql.conf:
+work_mem = '64MB'        -- global default</div>
+    <span class="tag t-ok">quicksort = in-memory = fast</span><span class="tag t-bad">external merge = disk = slow</span>`],
+  r_agg: ['#38bdf8','📦','HashAggregate — GROUP BY',
+    `<p>This node groups the joined rows by <code>u.name</code> and computes <code>count(o.id)</code> for each group using a hash table internally.</p>
+    <p>Notice: planner estimated 10,000 groups, actual was 9,821. That's a good estimate — only 2% off.</p>
+    <p>If GroupAggregate appears instead of HashAggregate, it means the input was already sorted by the group key — GROUP BY done without a hash, just by scanning sorted input.</p>`],
+  r_join: ['#a78bfa','🔗','Hash Join — Joining Two Tables',
+    `<p>Hash Join is PostgreSQL's most common join strategy for large tables. It works in two steps:</p>
+    <p><strong>Step 1:</strong> Build a hash table from the smaller table (users, 5,621 rows)<br>
+    <strong>Step 2:</strong> For each row in the larger table (orders, 50,000 rows), look it up in the hash table</p>
+    <p>This is O(n+m) — much better than checking every combination.</p>
+    <p>The planner chose this because both tables needed full scans anyway (no useful index for the join). If there were an index on <code>orders.user_id</code>, it might have used Nested Loop instead.</p>`],
+  r_join_cond: ['#a78bfa','🔗','Hash Cond — The Join Condition',
+    `<p><code>o.user_id = u.id</code> is the condition that links the two tables. Rows from orders and users that have the same value in these columns are joined together.</p>
+    <p>This is applied inside the hash table lookup — it's O(1) per row, which is why Hash Join is efficient.</p>
+    <p><strong>If you see a Filter line below Hash Cond</strong> — those are additional conditions applied after the hash lookup, meaning some matched rows were then discarded. That's slightly wasteful but often unavoidable.</p>`],
+  r_buffers: ['#38bdf8','💾','Buffers — Cache vs Disk Reads',
+    `<p><code>shared hit=892</code> — pages served from <code>shared_buffers</code> (in-memory cache). Essentially free.</p>
+    <p><code>shared read=143</code> — pages read from disk (or OS cache, but PostgreSQL doesn't distinguish). Slower.</p>
+    <p><strong>Good ratio:</strong> Many hits, few reads. Means your working set fits in memory.</p>
+    <p><strong>Bad ratio:</strong> Many reads, few hits. Either shared_buffers is too small or the query is touching data that doesn't fit in cache.</p>
+    <span class="tag t-ok">shared hit = from RAM (fast)</span><span class="tag t-warn">shared read = from disk (slow)</span>`],
+  r_seqscan_orders: ['#e85d3d','📚','Seq Scan on orders — Full Table Read',
+    `<p>All 50,000 orders are read. Since the Hash Join needs to check every order against all active users, a full scan is the right call here — there's no filter on orders that would make an index useful.</p>
+    <p>This is a case where Seq Scan is <strong>correct</strong>. The join needs all rows from orders. Reading them sequentially is faster than using an index to hop around randomly.</p>
+    <span class="tag t-ok">Seq Scan here is intentional and correct</span>`],
+  r_hash_build: ['#a78bfa','#️⃣','Hash — Building the Hash Table',
+    `<p>This node takes the users scan result (5,621 active users) and builds an in-memory hash table from them.</p>
+    <p>The hash table is then probed once for each orders row during the Hash Join above. Building it costs ~3.8ms. Probing it for 50,000 orders rows is the bulk of the join cost.</p>
+    <p>PostgreSQL always builds the hash table from the <strong>smaller</strong> of the two tables — that's why users (5,621 rows) is the build side and orders (50,000 rows) is the probe side.</p>`],
+  r_hash_stats: ['#22c55e','✅','Batches: 1 — Hash Table Fits in RAM',
+    `<p><strong>Batches: 1</strong> means the entire hash table fit in <code>work_mem</code>. All good.</p>
+    <p>If you see <strong>Batches: 4</strong> or higher, the hash table was too large and was split across multiple disk-based batches. Each batch requires writing to disk and reading back. Significantly slower.</p>
+    <div class="fix">-- Fix hash batches > 1:
+SET work_mem = '128MB';
+-- Check if Batches drops to 1</div>
+    <span class="tag t-ok">Batches: 1 = in memory = fast</span><span class="tag t-bad">Batches > 1 = spilled to disk</span>`],
+  r_seqscan_users: ['#e85d3d','📚','Seq Scan on users — Filtered Down',
+    `<p>10,000 users in the table. The scan reads all of them, but the <code>Filter: (status = 'active')</code> condition reduces it to 5,621 active users.</p>
+    <p>4,379 rows are read and thrown away (see Rows Removed by Filter below). This suggests that if queries like this run frequently, an index on <code>users.status</code> could help — though with only 2 values ('active'/'inactive') the selectivity might not be good enough.</p>`],
+  r_filter: ['#f97316','🔍','Filter — Applied After the Heap Fetch',
+    `<p><code>Filter: (status = 'active')</code> is applied to each row <em>after</em> it's been read from disk. This is less efficient than an <strong>Index Cond</strong> which filters before fetching.</p>
+    <p><strong>Filter</strong> appearing in a Seq Scan is normal — there's no index to use. <strong>Filter</strong> appearing in an Index Scan means the index wasn't precise enough on its own.</p>`],
+  r_removed: ['#f97316','⚠️','Rows Removed by Filter — Wasted Work',
+    `<p>4,379 rows were read from disk and then discarded because they didn't match <code>status = 'active'</code>.</p>
+    <p>For this query it's acceptable — 44% efficiency isn't great but it's not catastrophic. If this number were 999,999 out of 1,000,000 rows, that's when you'd want an index.</p>
+    <p><strong>Rule of thumb:</strong> If Rows Removed is much larger than rows returned, and the table is large, consider an index on the filter column.</p>
+    <span class="tag t-warn">High removal rate = candidate for an index</span>`],
+};
+function readDetail(key) {
+  const [c,i,t,b] = readData[key];
+  setDetail('detail-read', c, i, t, b);
+  document.querySelectorAll('.eline.active').forEach(e=>e.classList.remove('active'));
+  if (event && event.currentTarget) event.currentTarget.classList.add('active');
+}
+
+// ── WARNINGS ──
+const warnData = {
+  w_estimate: ['#f97316','⚠️','Estimate vs Reality — The Root Cause of Most Bad Plans',
+    `<p>The planner picks the plan based on how many rows it <em>thinks</em> will match. It gets this from <strong>statistics</strong> stored in <code>pg_stats</code> — collected by ANALYZE.</p>
+    <p>If you insert a million rows and never run ANALYZE, the planner still thinks your table is small. It picks an Index Scan (good for small results) when a Seq Scan would actually be faster for the now-large result set.</p>
+    <p><strong>Always check: does estimated rows ≈ actual rows?</strong> If they differ by 10× or more, fix the stats first.</p>
+    <div class="fix">-- Fix stale statistics:
+ANALYZE tablename;
+
+-- For columns with unusual distributions (many duplicate values):
+ALTER TABLE orders ALTER COLUMN status SET STATISTICS 500;
+ANALYZE orders;</div>`],
+  w_removed: ['#ef4444','🗑️','Rows Removed by Filter — Reading to Throw Away',
+    `<p>This is the most actionable warning sign. It tells you exactly how much work is being wasted.</p>
+    <p>When you see <strong>Rows Removed by Filter: 999,999</strong> in a Seq Scan, PostgreSQL read 1,000,000 rows from disk to return 1. With an index, it would have read 1 row.</p>
+    <p><strong>When to add an index:</strong> If the table is large (thousands+ rows) AND the filter is selective (removes most rows) AND this query runs frequently.</p>
+    <div class="fix">-- Example: user_id = 42 removes 999,999 rows
+CREATE INDEX ON orders (user_id);
+-- Now: Index Scan, no rows removed by filter</div>
+    <span class="tag t-info">Rows Removed / (Rows Removed + rows returned) = wasted work ratio</span>`],
+  w_disk: ['#e879f9','💾','Sort/Hash Spilled to Disk — work_mem Too Low',
+    `<p><code>work_mem</code> is the memory budget for in-memory operations like sorts and hash tables — <strong>per operation, per query</strong>. When a sort or hash table exceeds this budget, PostgreSQL writes it to temporary disk files.</p>
+    <p>Disk I/O is 10–100× slower than RAM. A sort that takes 50ms in memory might take 5 seconds on disk.</p>
+    <p><strong>How to identify:</strong></p>
+    <p>• Sort: <code>Sort Method: external merge  Disk: NkB</code><br>
+    • Hash: <code>Batches: 4</code> (anything > 1)</p>
+    <div class="fix">-- Fix for one session:
+SET work_mem = '256MB';
+
+-- Be careful with global setting — work_mem applies
+-- per operation, so 100 connections × 10 operations = 
+-- 100 × 10 × 256MB = 256GB potential RAM usage!</div>`],
+  w_loops: ['#f59e0b','🔁','loops — Hidden Cost in Nested Loop Joins',
+    `<p>Every node's <code>actual time</code> is the time <em>per loop</em>, not total. When a node is inside a Nested Loop Join, it runs once for each row from the outer table.</p>
+    <p><strong>The trap:</strong> 0.05ms per loop looks fast. But if loops=10,000, total cost is 500ms from just that node.</p>
+    <p><strong>Always multiply: actual time × loops = real cost</strong></p>
+    <p>When you see high loops with a nested loop join, it means the outer table has many rows. Solutions:</p>
+    <div class="fix">-- Option 1: Add an index on the inner table's join column
+CREATE INDEX ON orders (user_id);
+
+-- Option 2: Force a different join strategy (last resort)
+SET enable_nestloop = off;</div>`],
+};
+function warnDetail(key) {
+  const [c,i,t,b] = warnData[key];
+  setDetail('detail-warn', c, i, t, b);
+  document.querySelectorAll('.warn-card.lit').forEach(e=>e.classList.remove('lit'));
+  event.currentTarget.classList.add('lit');
+}
+
+const compareData = {
+  good_idx: ['#22c55e','✅','Index Scan — The Right Choice Here',
+    `<p>For <code>WHERE email = 'alice@example.com'</code>, an Index Scan is perfect. It looks up the exact value in the B-Tree and returns one row. 3-4 page reads total, regardless of table size.</p>`],
+  good_rows: ['#22c55e','✅','Estimate Matches Reality',
+    `<p>Planner estimated 1 row, actual was 1 row. Perfect. The planner had good statistics and made the right choice.</p>
+    <p>When estimates and actuals match closely, you can trust the planner's decision. When they diverge significantly, the planner might have chosen a sub-optimal plan.</p>`],
+  bad_seq: ['#e85d3d','⚠️','Seq Scan — Possibly Wrong Choice',
+    `<p>A Seq Scan on the same query suggests either: no index exists on email, or the planner's statistics are so wrong it thinks a Seq Scan is cheaper.</p>
+    <p>With stale statistics (planner thinks only 50 rows in table), the planner sees Seq Scan as cheap. In reality the table has 50,000 rows.</p>`],
+  bad_rows: ['#f97316','🚨','966× Estimate Error — Stale Statistics',
+    `<p>The planner estimated 50 rows would match. The actual result was 48,293 rows. That's a 966-fold difference.</p>
+    <p>This kind of divergence means the planner is making decisions based on completely wrong information. It might choose an Index Scan thinking it's fetching 50 rows, when really it's making 48,293 random disk seeks — far worse than a sequential scan.</p>
+    <div class="fix">ANALYZE users;  -- refreshes statistics
+-- Then re-run EXPLAIN ANALYZE to confirm improvement</div>`],
+  bad_removed: ['#ef4444','🗑️','48,292 Rows Wasted',
+    `<p>Of the 48,293 rows read, 48,292 were thrown away because they didn't match the email filter. That means 99.998% of work was wasted.</p>
+    <p>With an index on <code>email</code>, this query would read 1 row and return it. Zero rows removed by filter.</p>
+    <div class="fix">CREATE INDEX ON users (email);
+-- After: Index Scan, 0 rows removed by filter</div>`],
+};
+function compareDetail(key) {
+  const [c,i,t,b] = compareData[key];
+  setDetail('detail-compare', c, i, t, b);
+  document.querySelectorAll('.eline.active').forEach(e=>e.classList.remove('active'));
+  if (event && event.currentTarget) event.currentTarget.classList.add('active');
+}
+
+// ── DEBUG ──
+const debugData = {
+  d1: ['#38bdf8','🔬','Step 1 — Run EXPLAIN ANALYZE',
+    `<p>Plain <code>EXPLAIN</code> only shows estimates — it doesn't run the query. You can't tell if the planner was right or wrong.</p>
+    <p>Always use <code>EXPLAIN ANALYZE</code> to see actual row counts and times. Add <code>BUFFERS</code> to see how many pages came from memory vs disk.</p>
+    <div class="fix">EXPLAIN (ANALYZE, BUFFERS) SELECT ...;
+
+-- For DELETE/UPDATE (so you don't actually change data):
+BEGIN;
+EXPLAIN ANALYZE DELETE FROM orders WHERE status = 'old';
+ROLLBACK;</div>`],
+  d2: ['#38bdf8','🔍','Step 2 — Find the Slowest Node',
+    `<p>Look at <code>actual time=X..Y</code> on each node. The node with the highest Y value is where the most time is spent — your bottleneck.</p>
+    <p>Remember to account for <code>loops</code>. A node with <code>actual time=0.05 loops=10000</code> is actually 500ms total, even though it looks fast.</p>
+    <p><strong>Pro tip:</strong> Paste your EXPLAIN ANALYZE output into <a style="color:var(--info)" href="https://explain.depesz.com" target="_blank">explain.depesz.com</a> — it highlights the slowest nodes automatically.</p>`],
+  d3: ['#f97316','📊','Step 3 — Check Estimate vs Actual Rows',
+    `<p>For the slow node, compare <code>rows=X</code> (estimate) with <code>actual rows=Y</code>.</p>
+    <p>If they differ by more than 10×, the planner was working with bad data. Run <code>ANALYZE</code> and check again before trying anything else — stale statistics cause cascading wrong decisions.</p>
+    <div class="fix">-- Fix stale stats:
+ANALYZE tablename;
+
+-- Check stats freshness:
+SELECT last_analyze, last_autoanalyze, n_live_tup, n_dead_tup
+FROM pg_stat_user_tables
+WHERE relname = 'orders';</div>`],
+  d4: ['#ef4444','🗑️','Step 4 — Look for Rows Removed by Filter',
+    `<p>This tells you exactly how much work is being wasted. High Rows Removed on a large table with a selective filter = a missing index.</p>
+    <p><strong>Decision criteria for adding an index:</strong></p>
+    <p>• Table is large (thousands+ rows)<br>
+    • Filter removes most rows (high selectivity)<br>
+    • Query runs frequently (not a one-off report)<br>
+    • Rows Removed >> rows returned</p>
+    <p>If all four are true, add the index. If the query only runs once a day, a Seq Scan might be acceptable.</p>`],
+  d5: ['#e879f9','💾','Step 5 — Check for Disk Spills and High Loops',
+    `<p><strong>Disk spills:</strong> <code>Sort Method: external merge</code> or <code>Hash Batches > 1</code> means the operation exceeded work_mem. Try increasing work_mem for the session and check if it fixes the spill.</p>
+    <p><strong>High loops:</strong> Multiply <code>actual time × loops</code> for each node. If a small-looking node has very high loops, the total cost might be dominating your query time.</p>
+    <div class="fix">-- Test if work_mem helps:
+SET work_mem = '256MB';
+EXPLAIN ANALYZE SELECT ...;
+-- Check if "external merge" disappears
+
+-- Find expensive loops:
+-- Look for: actual time=0.05 loops=10000
+-- Real cost: 500ms hidden in that line</div>`],
+};
+const optData = {
+  opt_basic: ['#94a3b8','📋','EXPLAIN — Plan Only, No Execution',
+    `<p>Shows the plan the planner <em>would</em> choose, without running the query. Safe to use on any query including slow ones — no actual rows are read.</p>
+    <p><strong>Use when:</strong> You want to check if an index would be used before running an expensive query, or when you can't afford to wait for the query to run.</p>
+    <p><strong>Limitation:</strong> Shows only estimates. You can't tell if the planner's estimates are accurate without ANALYZE.</p>`],
+  opt_analyze: ['#22c55e','⚡','EXPLAIN ANALYZE — Run and Measure',
+    `<p>Actually runs the query and shows both estimated and actual numbers. This is what you need for debugging — estimates without reality are only half the picture.</p>
+    <p><strong>Important:</strong> The query really runs. For a SELECT this is fine. For DELETE/UPDATE, you'll want to wrap it in a transaction and ROLLBACK.</p>`],
+  opt_buffers: ['#38bdf8','💾','EXPLAIN (ANALYZE, BUFFERS) — The Full Picture',
+    `<p>This is the command to use for debugging slow queries. BUFFERS adds a line to each node showing how many pages came from shared_buffers (cache) vs disk.</p>
+    <p><code>shared hit=892</code> — served from memory (fast)<br>
+    <code>shared read=143</code> — read from disk (slow)</p>
+    <p>High read count relative to hit count means the query is doing a lot of disk I/O. Solutions: increase shared_buffers, or reduce the amount of data the query reads.</p>`],
+  opt_dml: ['#f97316','⚠️','EXPLAIN ANALYZE on DELETE/UPDATE — Use Transaction',
+    `<p>EXPLAIN ANALYZE <em>executes</em> the statement. If you run it on a DELETE without wrapping in a transaction, you'll actually delete your data.</p>
+    <p>The safe pattern is: begin a transaction, run EXPLAIN ANALYZE, then always roll back — regardless of what the output shows.</p>
+    <div class="fix">BEGIN;
+EXPLAIN ANALYZE DELETE FROM orders WHERE created_at < '2020-01-01';
+-- Read the output...
+ROLLBACK;  -- Always rollback, never commit here</div>`],
+};
+function debugDetail(key) {
+  const [c,i,t,b] = debugData[key];
+  setDetail('detail-debug', c, i, t, b);
+  document.querySelectorAll('.check-item.lit').forEach(e=>e.classList.remove('lit'));
+  event.currentTarget.classList.add('lit');
+}
+function optDetail(key) {
+  const [c,i,t,b] = optData[key];
+  setDetail('detail-opts', c, i, t, b);
+  document.querySelectorAll('.eline.active').forEach(e=>e.classList.remove('active'));
+  if (event && event.currentTarget) event.currentTarget.classList.add('active');
+}
+</script>
+</body>
+</html>
