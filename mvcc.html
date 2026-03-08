@@ -1,0 +1,1025 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MVCC & Isolation Levels — Visual Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#060a12; --s1:#0c1220; --s2:#111a2e; --s3:#162038;
+  --border:#1a2d48; --border2:#243d60;
+  --text:#dde8f5; --muted:#3a5270;
+  --mono:'JetBrains Mono',monospace; --sans:'Syne',sans-serif;
+  --cyan:#06b6d4; --green:#10b981; --amber:#f59e0b;
+  --red:#ef4444; --purple:#8b5cf6; --pink:#ec4899; --blue:#3b82f6;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh}
+.wrap{max-width:1000px;margin:0 auto;padding:40px 20px 80px}
+
+.eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase;margin-bottom:12px}
+h1{font-size:clamp(24px,4vw,44px);font-weight:800;line-height:1.1;margin-bottom:8px}
+h1 .hi{color:var(--cyan)}
+.sub{font-size:13px;color:var(--muted);margin-bottom:36px;line-height:1.6}
+
+.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:28px}
+.tab{font-family:var(--mono);font-size:11px;padding:8px 16px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s;white-space:nowrap}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+
+.view{display:none}
+.view.active{display:block;animation:up .18s ease}
+@keyframes up{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+.sec{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:14px;display:flex;align-items:center;gap:10px}
+.sec::after{content:'';flex:1;height:1px;background:var(--border)}
+
+.detail{background:var(--s1);border:1px solid var(--border2);border-left:3px solid var(--cyan);border-radius:6px;padding:18px 20px;margin-bottom:18px;transition:border-left-color .2s}
+.detail.empty{opacity:.3;border-left-color:var(--border)}
+.detail h3{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px}
+.detail p{font-size:13px;color:#6a8aaa;line-height:1.75;margin-bottom:7px}
+.detail p:last-child{margin-bottom:0}
+.detail strong{color:var(--text)}
+.detail code{font-family:var(--mono);font-size:11px;background:rgba(6,182,212,.1);color:#7dd3fc;padding:1px 5px;border-radius:3px}
+.fix{font-family:var(--mono);font-size:11px;background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:10px 12px;color:#6ee7b7;line-height:2;margin-top:8px;white-space:pre}
+.tag{display:inline-block;font-size:10px;font-family:var(--mono);padding:2px 8px;border-radius:2px;border:1px solid;margin:3px 2px 0}
+.t-ok{color:var(--green);border-color:rgba(16,185,129,.3);background:rgba(16,185,129,.07)}
+.t-warn{color:var(--amber);border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.07)}
+.t-bad{color:var(--red);border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.07)}
+.t-info{color:var(--cyan);border-color:rgba(6,182,212,.3);background:rgba(6,182,212,.07)}
+
+/* ── MVCC SIMULATOR ── */
+.sim-wrap{background:var(--s2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:16px}
+.sim-header{background:var(--s1);padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.sim-title{font-family:var(--mono);font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.1em}
+.sim-btns{display:flex;gap:6px;flex-wrap:wrap}
+.sim-btn{font-family:var(--mono);font-size:10px;padding:5px 12px;border-radius:4px;border:1px solid var(--border2);background:var(--s2);color:var(--muted);cursor:pointer;transition:all .15s}
+.sim-btn:hover{color:var(--text);border-color:var(--border2)}
+.sim-btn.act{background:rgba(6,182,212,.12);border-color:rgba(6,182,212,.4);color:var(--cyan)}
+.sim-btn.committed{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:var(--green)}
+.sim-btn.aborted{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3);color:var(--red)}
+
+.sim-body{padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.sim-col-title{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px}
+
+/* row versions */
+.row-versions{display:flex;flex-direction:column;gap:6px}
+.row-ver{border:1px solid var(--border);border-radius:6px;padding:10px 12px;transition:all .3s;cursor:pointer}
+.row-ver:hover{border-color:var(--border2)}
+.row-ver.visible{background:rgba(16,185,129,.07);border-color:rgba(16,185,129,.35)}
+.row-ver.dead{background:rgba(239,68,68,.04);border-color:rgba(239,68,68,.2);opacity:.55}
+.row-ver.candidate{background:rgba(245,158,11,.07);border-color:rgba(245,158,11,.3)}
+.rv-header{display:flex;align-items:center;gap:8px;margin-bottom:6px;font-family:var(--mono);font-size:10px}
+.rv-xmin{padding:2px 7px;border-radius:3px;font-weight:700}
+.rv-xmax{padding:2px 7px;border-radius:3px}
+.rv-status{margin-left:auto;font-size:9px;padding:2px 7px;border-radius:3px;font-weight:700}
+.status-visible{background:rgba(16,185,129,.15);color:var(--green)}
+.status-dead{background:rgba(239,68,68,.12);color:var(--red)}
+.status-maybe{background:rgba(245,158,11,.12);color:var(--amber)}
+.rv-data{font-family:var(--mono);font-size:12px;color:var(--text);padding:4px 0 0}
+.rv-reason{font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:4px;line-height:1.6}
+
+/* snapshot panel */
+.snapshot-panel{background:var(--s3);border:1px solid var(--border);border-radius:6px;padding:14px}
+.snap-entry{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:11px}
+.snap-entry:last-child{border-bottom:none}
+.snap-xid{width:32px;color:var(--amber);font-weight:700}
+.snap-state{flex:1}
+.snap-vis{font-size:9px;padding:2px 7px;border-radius:3px;font-weight:700}
+
+/* control row */
+.sim-controls{padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.ctrl-label{font-family:var(--mono);font-size:10px;color:var(--muted)}
+.ctrl-btn{font-family:var(--mono);font-size:10px;padding:6px 14px;border-radius:4px;cursor:pointer;transition:all .15s;border:1px solid}
+.ctrl-commit{background:rgba(16,185,129,.1);border-color:rgba(16,185,129,.3);color:var(--green)}
+.ctrl-commit:hover{background:rgba(16,185,129,.2)}
+.ctrl-rollback{background:rgba(239,68,68,.1);border-color:rgba(239,68,68,.3);color:var(--red)}
+.ctrl-rollback:hover{background:rgba(239,68,68,.2)}
+.ctrl-reset{background:var(--s2);border-color:var(--border2);color:var(--muted)}
+.ctrl-reset:hover{color:var(--text)}
+
+/* isolation level cards */
+.iso-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.iso-card{background:var(--s1);border:1px solid var(--border);border-radius:8px;overflow:hidden;cursor:pointer;transition:all .15s}
+.iso-card:hover,.iso-card.lit{border-color:var(--ic);box-shadow:0 0 20px var(--icg)}
+.iso-head{padding:12px 16px 8px;border-bottom:1px solid var(--border)}
+.iso-name{font-family:var(--mono);font-size:13px;font-weight:700;color:var(--ic)}
+.iso-tag{font-size:10px;color:var(--muted);margin-top:2px}
+.iso-body{padding:12px 16px;font-size:12px;color:var(--muted);line-height:1.65}
+.iso-snap{font-family:var(--mono);font-size:10px;background:var(--s2);border-radius:4px;padding:7px 10px;margin-top:8px;line-height:1.8;color:#475569}
+.iso-snap .hi{color:var(--ic)}
+
+/* anomaly cards */
+.anom-list{display:flex;flex-direction:column;gap:10px;margin-bottom:16px}
+.anom-card{background:var(--s1);border:1px solid var(--border);border-radius:8px;overflow:hidden;cursor:pointer;transition:all .15s}
+.anom-card:hover,.anom-card.lit{border-color:var(--ac);box-shadow:0 0 14px var(--acg)}
+.anom-row{display:grid;grid-template-columns:180px 1fr 120px;align-items:center;gap:0}
+.anom-name{padding:14px 16px;font-family:var(--mono);font-size:12px;font-weight:700;color:var(--ac);border-right:1px solid var(--border)}
+.anom-desc{padding:12px 16px;font-size:12px;color:var(--muted);line-height:1.5}
+.anom-levels{padding:12px 16px;font-family:var(--mono);font-size:10px;color:var(--muted);border-left:1px solid var(--border);line-height:1.8}
+
+/* timeline for isolation demo */
+.iso-demo{background:var(--s2);border:1px solid var(--border);border-radius:8px;margin-bottom:14px;overflow:hidden}
+.iso-demo-head{padding:10px 16px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:11px;color:var(--muted);display:flex;align-items:center;gap:10px}
+.iso-demo-body{display:grid;grid-template-columns:1fr 1fr;gap:0}
+.iso-lane{padding:14px 16px}
+.iso-lane:first-child{border-right:1px solid var(--border)}
+.iso-lane-title{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px}
+.iso-event{display:flex;gap:10px;margin-bottom:8px;align-items:flex-start}
+.ie-time{font-family:var(--mono);font-size:10px;color:var(--muted);width:32px;flex-shrink:0;padding-top:1px}
+.ie-box{flex:1;font-family:var(--mono);font-size:11px;padding:6px 10px;border-radius:4px;line-height:1.6;cursor:pointer;transition:all .12s}
+.ie-box:hover{filter:brightness(1.2)}
+
+@media(max-width:640px){
+  .sim-body{grid-template-columns:1fr}
+  .iso-grid{grid-template-columns:1fr}
+  .anom-row{grid-template-columns:1fr}
+  .anom-name{border-right:none;border-bottom:1px solid var(--border)}
+  .anom-levels{border-left:none;border-top:1px solid var(--border)}
+  .iso-demo-body{grid-template-columns:1fr}
+  .iso-lane:first-child{border-right:none;border-bottom:1px solid var(--border)}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">postgresql · mvcc · transactions · visual guide</div>
+<h1>MVCC &<br><span class="hi">Isolation Levels</span></h1>
+<p class="sub">Simulate snapshots, watch row visibility change, and see exactly what each isolation level protects against.</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="st('mvcc')">MVCC Simulator</div>
+  <div class="tab" onclick="st('snapshot')">How Snapshots Work</div>
+  <div class="tab" onclick="st('isolation')">Isolation Levels</div>
+  <div class="tab" onclick="st('anomalies')">Anomalies</div>
+  <div class="tab" onclick="st('choose')">Which to Use</div>
+</div>
+
+<!-- ══════ MVCC SIMULATOR ══════ -->
+<div class="view active" id="view-mvcc">
+  <div class="sec">row version visibility simulator</div>
+  <p style="font-size:13px;color:var(--muted);margin-bottom:14px;line-height:1.65">
+    Each button is a transaction. Change their state (in-progress → committed → aborted) and watch which row versions become visible to <strong style="color:var(--cyan)">Your Transaction (201)</strong>.
+  </p>
+
+  <div class="sim-wrap">
+    <div class="sim-header">
+      <span class="sim-title">Other transactions</span>
+      <div class="sim-btns">
+        <div class="sim-btn act" id="btn-100" onclick="cycleState(100)">txn 100</div>
+        <div class="sim-btn act" id="btn-150" onclick="cycleState(150)">txn 150</div>
+        <div class="sim-btn act" id="btn-200" onclick="cycleState(200)">txn 200</div>
+        <div class="sim-btn act" id="btn-202" onclick="cycleState(202)">txn 202</div>
+      </div>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:auto">click to cycle: in-progress → committed → aborted</span>
+    </div>
+
+    <div class="sim-body">
+      <div>
+        <div class="sim-col-title">Row versions on disk</div>
+        <div class="row-versions" id="row-versions"></div>
+      </div>
+      <div>
+        <div class="sim-col-title">Your snapshot (txn 201)</div>
+        <div class="snapshot-panel" id="snapshot-panel"></div>
+        <div style="margin-top:12px;font-family:var(--mono);font-size:11px;color:var(--muted)">
+          <span style="color:var(--cyan)">Your transaction 201</span> sees only rows whose xmin is committed <em>and</em> whose xmax is not yet committed in your snapshot.
+        </div>
+      </div>
+    </div>
+    <div class="sim-controls">
+      <span class="ctrl-label">Quick scenarios:</span>
+      <div class="ctrl-btn ctrl-commit" onclick="scenario('all_committed')">All committed</div>
+      <div class="ctrl-btn ctrl-rollback" onclick="scenario('writer_in_progress')">Writer in-progress</div>
+      <div class="ctrl-btn ctrl-rollback" onclick="scenario('writer_aborted')">Writer aborted</div>
+      <div class="ctrl-btn ctrl-reset" onclick="scenario('reset')">Reset</div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-mvcc">
+    <h3>← Click a row version above to understand why it's visible or not</h3>
+    <p>The visibility rule: xmin must be committed in your snapshot, AND xmax must not be committed in your snapshot.</p>
+  </div>
+
+  <div class="sec">the xmin / xmax rule in plain english</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px;cursor:pointer" onclick="explainRule('xmin')">
+      <div style="font-family:var(--mono);font-size:11px;color:var(--cyan);font-weight:700;margin-bottom:8px">xmin — birth certificate</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.65">The transaction that INSERT-ed this row. A row only exists to you if xmin's transaction is in your "committed" list.</div>
+      <div style="font-family:var(--mono);font-size:10px;background:var(--s2);border-radius:4px;padding:7px;margin-top:8px;color:#475569">
+        xmin=100 + txn 100 committed<br>
+        → row was born ✓ I can see it
+      </div>
+    </div>
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px;cursor:pointer" onclick="explainRule('xmax')">
+      <div style="font-family:var(--mono);font-size:11px;color:var(--amber);font-weight:700;margin-bottom:8px">xmax — death certificate</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.65">The transaction that DELETE-d or UPDATE-d this row. Row is dead to you only if xmax's transaction committed in your snapshot.</div>
+      <div style="font-family:var(--mono);font-size:10px;background:var(--s2);border-radius:4px;padding:7px;margin-top:8px;color:#475569">
+        xmax=200 + txn 200 in-progress<br>
+        → not dead yet ✓ I still see it
+      </div>
+    </div>
+  </div>
+  <div class="detail empty" id="detail-rule">
+    <h3>← Click xmin or xmax above</h3>
+  </div>
+</div>
+
+<!-- ══════ SNAPSHOT ══════ -->
+<div class="view" id="view-snapshot">
+  <div class="sec">what a snapshot actually contains</div>
+
+  <div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:16px">
+    <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px">Your transaction 201's snapshot — taken when you ran BEGIN</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px">
+      <div style="background:var(--s1);border:1px solid var(--border);border-radius:6px;padding:12px;cursor:pointer" onclick="snapDetail('xmin_horizon')">
+        <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:var(--cyan)">xmin</div>
+        <div style="font-family:var(--mono);font-size:13px;color:var(--amber);margin:4px 0">= 198</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.5">Lowest XID still in progress. Any row with xmin &lt; 198 and committed is definitely visible.</div>
+      </div>
+      <div style="background:var(--s1);border:1px solid var(--border);border-radius:6px;padding:12px;cursor:pointer" onclick="snapDetail('xmax_horizon')">
+        <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:var(--cyan)">xmax</div>
+        <div style="font-family:var(--mono);font-size:13px;color:var(--amber);margin:4px 0">= 202</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.5">Next XID to be assigned. Any row with xmin ≥ 202 definitely doesn't exist yet for you.</div>
+      </div>
+      <div style="background:var(--s1);border:1px solid var(--border);border-radius:6px;padding:12px;cursor:pointer" onclick="snapDetail('xip')">
+        <div style="font-family:var(--mono);font-size:20px;font-weight:700;color:var(--cyan)">xip</div>
+        <div style="font-family:var(--mono);font-size:13px;color:var(--amber);margin:4px 0">= [198, 200]</div>
+        <div style="font-size:11px;color:var(--muted);line-height:1.5">In-Progress list. XIDs between xmin and xmax that are STILL running. Their rows are invisible to you.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-snap">
+    <h3>← Click a snapshot component to understand it</h3>
+  </div>
+
+  <div class="sec">step-by-step visibility decision</div>
+
+  <div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:16px">
+    <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:10px;color:var(--muted)">Click each step to walk through the visibility check</div>
+
+    <div style="padding:14px 16px;display:flex;flex-direction:column;gap:8px" id="vis-steps">
+      <div class="vis-step" onclick="visStep(0)" style="background:var(--s1);border:1px solid var(--border);border-radius:6px;padding:10px 14px;cursor:pointer;transition:all .15s">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px">STEP 1</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text)">Check xmin — was this row's creator committed in my snapshot?</div>
+        <div style="font-family:var(--mono);font-size:10px;color:#475569;margin-top:4px">Row has xmin=100. Is txn 100 in my committed list? → YES → proceed to step 2</div>
+      </div>
+      <div class="vis-step" onclick="visStep(1)" style="background:var(--s1);border:1px solid var(--border);border-radius:6px;padding:10px 14px;cursor:pointer;transition:all .15s">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px">STEP 2</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text)">Check xmax — was this row's deleter committed in my snapshot?</div>
+        <div style="font-family:var(--mono);font-size:10px;color:#475569;margin-top:4px">Row has xmax=200. Is txn 200 committed? → NO (in-progress) → row is NOT dead yet</div>
+      </div>
+      <div class="vis-step" onclick="visStep(2)" style="background:var(--s1);border:1px solid var(--border);border-radius:6px;padding:10px 14px;cursor:pointer;transition:all .15s">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:4px">RESULT</div>
+        <div style="font-family:var(--mono);font-size:11px;color:var(--green)">✓ Row is visible — xmin committed, xmax not committed → row exists and is alive to me</div>
+        <div style="font-family:var(--mono);font-size:10px;color:#475569;margin-top:4px">I see name='Alice' even though someone is in the middle of updating it</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-vis">
+    <h3>← Click a step above</h3>
+  </div>
+
+  <div class="sec">the key insight — why this replaces locks</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+    <div style="background:rgba(239,68,68,.05);border:1px solid rgba(239,68,68,.2);border-radius:8px;padding:14px">
+      <div style="font-family:var(--mono);font-size:11px;color:var(--red);font-weight:700;margin-bottom:8px">❌ Without MVCC (locking)</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.7">Writer locks the row.<br>Reader must WAIT until writer commits or rolls back.<br>High concurrency = long queues.<br>Reader blocks writer, writer blocks reader.</div>
+    </div>
+    <div style="background:rgba(16,185,129,.05);border:1px solid rgba(16,185,129,.2);border-radius:8px;padding:14px">
+      <div style="font-family:var(--mono);font-size:11px;color:var(--green);font-weight:700;margin-bottom:8px">✓ With MVCC</div>
+      <div style="font-size:12px;color:var(--muted);line-height:1.7">Writer creates a new row version.<br>Reader sees the old version via snapshot.<br>Both work simultaneously, no waiting.<br>Readers never block writers, writers never block readers.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══════ ISOLATION LEVELS ══════ -->
+<div class="view" id="view-isolation">
+  <div class="sec">four levels — click each to see the key difference</div>
+
+  <div class="iso-grid">
+    <div class="iso-card" style="--ic:var(--blue);--icg:rgba(59,130,246,.15)" onclick="isoDetail('rc')">
+      <div class="iso-head">
+        <div class="iso-name">Read Committed</div>
+        <div class="iso-tag">PostgreSQL default · most apps use this</div>
+      </div>
+      <div class="iso-body">
+        New snapshot taken per <strong style="color:var(--blue)">statement</strong>. Each query sees all commits up to that moment.
+        <div class="iso-snap">
+          BEGIN;<br>
+          SELECT ...  <span class="hi">← snapshot 1 taken here</span><br>
+          <span style="color:#374151">-- other txn commits --</span><br>
+          SELECT ...  <span class="hi">← snapshot 2 taken here</span><br>
+          COMMIT;
+        </div>
+      </div>
+    </div>
+
+    <div class="iso-card" style="--ic:var(--cyan);--icg:rgba(6,182,212,.15)" onclick="isoDetail('rr')">
+      <div class="iso-head">
+        <div class="iso-name">Repeatable Read</div>
+        <div class="iso-tag">One snapshot for entire transaction</div>
+      </div>
+      <div class="iso-body">
+        Snapshot taken <strong style="color:var(--cyan)">once at BEGIN</strong>. All queries see the same frozen state.
+        <div class="iso-snap">
+          BEGIN; <span class="hi">← snapshot taken ONCE here</span><br>
+          SELECT ...  <span class="hi">← uses same snapshot</span><br>
+          <span style="color:#374151">-- other txn commits --</span><br>
+          SELECT ...  <span class="hi">← still same snapshot</span><br>
+          COMMIT;
+        </div>
+      </div>
+    </div>
+
+    <div class="iso-card" style="--ic:var(--purple);--icg:rgba(139,92,246,.15)" onclick="isoDetail('ser')">
+      <div class="iso-head">
+        <div class="iso-name">Serializable</div>
+        <div class="iso-tag">Strongest · detects dependency cycles</div>
+      </div>
+      <div class="iso-body">
+        Snapshot + <strong style="color:var(--purple)">conflict detection</strong>. Aborts transactions that would produce impossible results.
+        <div class="iso-snap">
+          BEGIN ISOLATION LEVEL SERIALIZABLE;<br>
+          SELECT ... UPDATE ...<br>
+          COMMIT;<br>
+          <span class="hi">-- or: ERROR: could not serialize</span><br>
+          <span style="color:#374151">-- retry if aborted</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="iso-card" style="--ic:var(--muted);--icg:rgba(58,82,112,.15)" onclick="isoDetail('ru')">
+      <div class="iso-head">
+        <div class="iso-name">Read Uncommitted</div>
+        <div class="iso-tag">Theoretical · PostgreSQL ignores it</div>
+      </div>
+      <div class="iso-body">
+        In theory: can read uncommitted data. In PostgreSQL: <strong style="color:var(--text)">identical to Read Committed</strong>. Dirty reads are impossible in PostgreSQL by design.
+        <div class="iso-snap">
+          SET TRANSACTION ISOLATION LEVEL<br>
+          &nbsp;&nbsp;READ UNCOMMITTED;<br>
+          <span class="hi">-- PostgreSQL silently treats this</span><br>
+          <span class="hi">-- as READ COMMITTED</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-iso">
+    <h3>← Click an isolation level</h3>
+  </div>
+
+  <div class="sec">live examples — two transactions running simultaneously</div>
+
+  <div class="iso-demo">
+    <div class="iso-demo-head">
+      <span style="color:var(--blue)">■</span>&nbsp;
+      <span>Read Committed — same query, different results mid-transaction</span>
+      <div style="margin-left:auto;font-size:10px;color:var(--muted)">Click any event</div>
+    </div>
+    <div class="iso-demo-body">
+      <div class="iso-lane">
+        <div class="iso-lane-title">Your Transaction (A)</div>
+        <div class="iso-event"><span class="ie-time">t=1</span><div class="ie-box" style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);color:#93c5fd" onclick="demoDetail('rc_begin')">BEGIN;</div></div>
+        <div class="iso-event"><span class="ie-time">t=2</span><div class="ie-box" style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);color:#93c5fd" onclick="demoDetail('rc_read1')">SELECT balance FROM accounts WHERE id=1;<br><span style="color:var(--green)">→ returns: 1000</span></div></div>
+        <div class="iso-event"><span class="ie-time">t=5</span><div class="ie-box" style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);color:#93c5fd" onclick="demoDetail('rc_read2')">SELECT balance FROM accounts WHERE id=1;<br><span style="color:var(--red)">→ returns: 1500 ← different!</span></div></div>
+        <div class="iso-event"><span class="ie-time">t=6</span><div class="ie-box" style="background:rgba(59,130,246,.08);border:1px solid rgba(59,130,246,.2);color:#93c5fd" onclick="demoDetail('rc_commit')">COMMIT;</div></div>
+      </div>
+      <div class="iso-lane">
+        <div class="iso-lane-title">Concurrent Transaction (B)</div>
+        <div class="iso-event"><span class="ie-time">t=3</span><div class="ie-box" style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:#fcd34d" onclick="demoDetail('rc_b_update')">UPDATE accounts SET balance=1500 WHERE id=1;</div></div>
+        <div class="iso-event"><span class="ie-time">t=4</span><div class="ie-box" style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);color:#6ee7b7" onclick="demoDetail('rc_b_commit')">COMMIT; ← balance is now 1500</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="iso-demo">
+    <div class="iso-demo-head">
+      <span style="color:var(--cyan)">■</span>&nbsp;
+      <span>Repeatable Read — same query, always same result</span>
+      <div style="margin-left:auto;font-size:10px;color:var(--muted)">Click any event</div>
+    </div>
+    <div class="iso-demo-body">
+      <div class="iso-lane">
+        <div class="iso-lane-title">Your Transaction (A)</div>
+        <div class="iso-event"><span class="ie-time">t=1</span><div class="ie-box" style="background:rgba(6,182,212,.07);border:1px solid rgba(6,182,212,.2);color:#67e8f9" onclick="demoDetail('rr_begin')">BEGIN ISOLATION LEVEL REPEATABLE READ;<br><span style="color:var(--cyan)">← snapshot frozen here</span></div></div>
+        <div class="iso-event"><span class="ie-time">t=2</span><div class="ie-box" style="background:rgba(6,182,212,.07);border:1px solid rgba(6,182,212,.2);color:#67e8f9" onclick="demoDetail('rr_read1')">SELECT balance FROM accounts WHERE id=1;<br><span style="color:var(--green)">→ returns: 1000</span></div></div>
+        <div class="iso-event"><span class="ie-time">t=5</span><div class="ie-box" style="background:rgba(6,182,212,.07);border:1px solid rgba(6,182,212,.2);color:#67e8f9" onclick="demoDetail('rr_read2')">SELECT balance FROM accounts WHERE id=1;<br><span style="color:var(--green)">→ returns: 1000 ← same!</span></div></div>
+        <div class="iso-event"><span class="ie-time">t=6</span><div class="ie-box" style="background:rgba(6,182,212,.07);border:1px solid rgba(6,182,212,.2);color:#67e8f9" onclick="demoDetail('rr_commit')">COMMIT;</div></div>
+      </div>
+      <div class="iso-lane">
+        <div class="iso-lane-title">Concurrent Transaction (B)</div>
+        <div class="iso-event"><span class="ie-time">t=3</span><div class="ie-box" style="background:rgba(245,158,11,.07);border:1px solid rgba(245,158,11,.2);color:#fcd34d" onclick="demoDetail('rr_b_update')">UPDATE accounts SET balance=1500 WHERE id=1;</div></div>
+        <div class="iso-event"><span class="ie-time">t=4</span><div class="ie-box" style="background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);color:#6ee7b7" onclick="demoDetail('rr_b_commit')">COMMIT; ← balance is now 1500<br>but A's snapshot is frozen at t=1</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-demo">
+    <h3>← Click any event in the timelines above</h3>
+  </div>
+</div>
+
+<!-- ══════ ANOMALIES ══════ -->
+<div class="view" id="view-anomalies">
+  <div class="sec">four anomalies — what can go wrong</div>
+
+  <div class="anom-list">
+    <div class="anom-card" style="--ac:var(--muted);--acg:rgba(58,82,112,.1)" onclick="anomDetail('dirty')">
+      <div class="anom-row">
+        <div class="anom-name">Dirty Read</div>
+        <div class="anom-desc">Read uncommitted data from another transaction. If it rolls back, you read data that never officially existed.</div>
+        <div class="anom-levels"><span style="color:var(--green)">PostgreSQL:</span><br>Never happens.<br>All levels safe.</div>
+      </div>
+    </div>
+    <div class="anom-card" style="--ac:var(--amber);--acg:rgba(245,158,11,.12)" onclick="anomDetail('nonrep')">
+      <div class="anom-row">
+        <div class="anom-name">Non-Repeatable<br>Read</div>
+        <div class="anom-desc">Read the same row twice, get different values. Another transaction committed a change between your two reads.</div>
+        <div class="anom-levels"><span style="color:var(--red)">Read Committed:</span><br>Can happen.<br><span style="color:var(--green)">Repeatable Read+:</span><br>Prevented.</div>
+      </div>
+    </div>
+    <div class="anom-card" style="--ac:var(--orange,#f97316);--acg:rgba(249,115,22,.12)" onclick="anomDetail('phantom')" style="--ac:#f97316;--acg:rgba(249,115,22,.12)">
+      <div class="anom-row">
+        <div class="anom-name" style="color:#f97316">Phantom Read</div>
+        <div class="anom-desc">Run same query twice, different rows appear. Another transaction inserted rows matching your WHERE clause between your two queries.</div>
+        <div class="anom-levels"><span style="color:var(--red)">Read Committed:</span><br>Can happen.<br><span style="color:var(--green)">Repeatable Read+:</span><br>Prevented (PG).</div>
+      </div>
+    </div>
+    <div class="anom-card" style="--ac:var(--red);--acg:rgba(239,68,68,.12)" onclick="anomDetail('lost')">
+      <div class="anom-row">
+        <div class="anom-name">Lost Update</div>
+        <div class="anom-desc">Two transactions read a value, both compute updates, both write back. Last write wins, first write is silently lost.</div>
+        <div class="anom-levels"><span style="color:var(--red)">Read Committed:</span><br>Can happen.<br><span style="color:var(--green)">Use atomic UPDATE<br>or FOR UPDATE.</span></div>
+      </div>
+    </div>
+    <div class="anom-card" style="--ac:var(--purple);--acg:rgba(139,92,246,.12)" onclick="anomDetail('serial')">
+      <div class="anom-row">
+        <div class="anom-name">Serialization<br>Anomaly</div>
+        <div class="anom-desc">Each transaction is individually correct, but together they produce a result that could never happen if they ran one at a time.</div>
+        <div class="anom-levels"><span style="color:var(--red)">All lower levels:</span><br>Can happen.<br><span style="color:var(--green)">Serializable:</span><br>Prevented.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-anom">
+    <h3>← Click an anomaly to see a detailed example with SQL</h3>
+  </div>
+</div>
+
+<!-- ══════ WHICH TO USE ══════ -->
+<div class="view" id="view-choose">
+  <div class="sec">decision guide — click your situation</div>
+
+  <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="chooseDetail('web_app')">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="font-family:var(--mono);font-size:20px">🌐</div>
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--blue);margin-bottom:3px">Typical web app — read a row, display it, maybe update it</div>
+          <div style="font-size:12px;color:var(--muted)">User profile pages, product listings, dashboards with single queries</div>
+        </div>
+        <div style="margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--blue);white-space:nowrap">Read Committed →</div>
+      </div>
+    </div>
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="chooseDetail('report')">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="font-family:var(--mono);font-size:20px">📊</div>
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--cyan);margin-bottom:3px">Multi-query report that must be internally consistent</div>
+          <div style="font-size:12px;color:var(--muted)">Financial reports, analytics, any place you run 3+ queries and numbers must add up</div>
+        </div>
+        <div style="margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--cyan);white-space:nowrap">Repeatable Read →</div>
+      </div>
+    </div>
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="chooseDetail('transfer')">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="font-family:var(--mono);font-size:20px">💸</div>
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--amber);margin-bottom:3px">Financial transfer — read balance, deduct from A, add to B</div>
+          <div style="font-size:12px;color:var(--muted)">Bank transfers, wallet credits, any money movement between accounts</div>
+        </div>
+        <div style="margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--amber);white-space:nowrap">Atomic UPDATE →</div>
+      </div>
+    </div>
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="chooseDetail('inventory')">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="font-family:var(--mono);font-size:20px">📦</div>
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--red);margin-bottom:3px">Inventory — check stock, reserve, confirm</div>
+          <div style="font-size:12px;color:var(--muted)">Seat booking, stock reservation, anything where overselling is catastrophic</div>
+        </div>
+        <div style="margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--red);white-space:nowrap">SELECT FOR UPDATE →</div>
+      </div>
+    </div>
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:all .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="chooseDetail('critical')">
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="font-family:var(--mono);font-size:20px">🔒</div>
+        <div>
+          <div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--purple);margin-bottom:3px">Mission critical — correctness more important than throughput</div>
+          <div style="font-size:12px;color:var(--muted)">Trading systems, medical records, anywhere a wrong result is unacceptable</div>
+        </div>
+        <div style="margin-left:auto;font-family:var(--mono);font-size:11px;color:var(--purple);white-space:nowrap">Serializable →</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-choose">
+    <h3>← Click your situation above</h3>
+  </div>
+
+  <div class="sec">summary table</div>
+  <div style="overflow-x:auto">
+  <table style="width:100%;border-collapse:collapse;font-family:var(--mono);font-size:11px">
+    <thead>
+      <tr>
+        <th style="padding:10px 12px;text-align:left;background:var(--s2);color:var(--muted);border-bottom:1px solid var(--border)">Level</th>
+        <th style="padding:10px 12px;text-align:left;background:var(--s2);color:var(--muted);border-bottom:1px solid var(--border)">Snapshot taken</th>
+        <th style="padding:10px 12px;text-align:left;background:var(--s2);color:var(--muted);border-bottom:1px solid var(--border)">Non-rep read</th>
+        <th style="padding:10px 12px;text-align:left;background:var(--s2);color:var(--muted);border-bottom:1px solid var(--border)">Phantom read</th>
+        <th style="padding:10px 12px;text-align:left;background:var(--s2);color:var(--muted);border-bottom:1px solid var(--border)">Serial anomaly</th>
+        <th style="padding:10px 12px;text-align:left;background:var(--s2);color:var(--muted);border-bottom:1px solid var(--border)">Cost</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr onclick="tableRow('rc')" style="cursor:pointer;transition:background .12s" onmouseover="this.style.background='rgba(59,130,246,.05)'" onmouseout="this.style.background=''">
+        <td style="padding:10px 12px;color:var(--blue);font-weight:700;border-bottom:1px solid var(--border)">Read Committed</td>
+        <td style="padding:10px 12px;color:#64748b;border-bottom:1px solid var(--border)">Per statement</td>
+        <td style="padding:10px 12px;color:var(--red);border-bottom:1px solid var(--border)">Possible</td>
+        <td style="padding:10px 12px;color:var(--red);border-bottom:1px solid var(--border)">Possible</td>
+        <td style="padding:10px 12px;color:var(--red);border-bottom:1px solid var(--border)">Possible</td>
+        <td style="padding:10px 12px;color:var(--green);border-bottom:1px solid var(--border)">Lowest</td>
+      </tr>
+      <tr onclick="tableRow('rr')" style="cursor:pointer;transition:background .12s" onmouseover="this.style.background='rgba(6,182,212,.05)'" onmouseout="this.style.background=''">
+        <td style="padding:10px 12px;color:var(--cyan);font-weight:700;border-bottom:1px solid var(--border)">Repeatable Read</td>
+        <td style="padding:10px 12px;color:#64748b;border-bottom:1px solid var(--border)">Once at BEGIN</td>
+        <td style="padding:10px 12px;color:var(--green);border-bottom:1px solid var(--border)">Prevented</td>
+        <td style="padding:10px 12px;color:var(--green);border-bottom:1px solid var(--border)">Prevented (PG)</td>
+        <td style="padding:10px 12px;color:var(--red);border-bottom:1px solid var(--border)">Possible</td>
+        <td style="padding:10px 12px;color:var(--amber);border-bottom:1px solid var(--border)">Medium</td>
+      </tr>
+      <tr onclick="tableRow('ser')" style="cursor:pointer;transition:background .12s" onmouseover="this.style.background='rgba(139,92,246,.05)'" onmouseout="this.style.background=''">
+        <td style="padding:10px 12px;color:var(--purple);font-weight:700;border-bottom:1px solid var(--border)">Serializable</td>
+        <td style="padding:10px 12px;color:#64748b;border-bottom:1px solid var(--border)">Once + tracking</td>
+        <td style="padding:10px 12px;color:var(--green);border-bottom:1px solid var(--border)">Prevented</td>
+        <td style="padding:10px 12px;color:var(--green);border-bottom:1px solid var(--border)">Prevented</td>
+        <td style="padding:10px 12px;color:var(--green);border-bottom:1px solid var(--border)">Prevented</td>
+        <td style="padding:10px 12px;color:var(--red);border-bottom:1px solid var(--border)">Highest + retries</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+
+</div><!-- /wrap -->
+<script>
+// ─── Tab switching ───
+const TM={mvcc:0,snapshot:1,isolation:2,anomalies:3,choose:4};
+function st(n){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('view-'+n).classList.add('active');
+  document.querySelectorAll('.tab')[TM[n]].classList.add('active');
+}
+function sd(id,color,title,body){
+  const el=document.getElementById(id);
+  if(!el)return;
+  el.style.borderLeftColor=color;
+  el.classList.remove('empty');
+  el.innerHTML=`<h3>${title}</h3>${body}`;
+  el.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+// ─── MVCC Simulator ───
+const states={100:'committed',150:'committed',200:'in-progress',202:'in-progress'};
+const rows=[
+  {xmin:100,xmax:0,   data:"id=1, name='Alice'",     desc:"Original INSERT in txn 100"},
+  {xmin:100,xmax:200, data:"id=1, name='Alice'",     desc:"Old version, killed by txn 200's UPDATE"},
+  {xmin:200,xmax:0,   data:"id=1, name='Alice v2'",  desc:"New version created by txn 200's UPDATE"},
+  {xmin:150,xmax:202, data:"id=2, name='Bob'",       desc:"Bob's row, being deleted by txn 202"},
+  {xmin:202,xmax:0,   data:"id=3, name='Charlie'",   desc:"New row being inserted by txn 202"},
+];
+
+function isVisible(row){
+  const xminState=states[row.xmin]||'committed';
+  const xmaxState=row.xmax===0?'none':states[row.xmax]||'committed';
+  const xminOk=xminState==='committed';
+  const xmaxOk=xmaxState==='none'||xmaxState==='in-progress'||xmaxState==='aborted';
+  return xminOk&&xmaxOk;
+}
+function visReason(row){
+  const xminState=states[row.xmin]||'committed';
+  const xmaxState=row.xmax===0?'none':states[row.xmax]||'committed';
+  let r=[];
+  r.push(`xmin=${row.xmin}: ${xminState}`);
+  if(row.xmax===0) r.push('xmax=0: row still alive');
+  else r.push(`xmax=${row.xmax}: ${xmaxState}`);
+  return r.join(' · ');
+}
+function renderSim(){
+  // row versions
+  const rv=document.getElementById('row-versions');
+  rv.innerHTML='';
+  rows.forEach((row,i)=>{
+    const vis=isVisible(row);
+    const xmaxState=row.xmax===0?'none':states[row.xmax]||'committed';
+    const xminState=states[row.xmin]||'committed';
+    let cls=vis?'visible':'dead';
+    if(!vis&&(xminState==='in-progress'||xminState==='aborted')) cls='dead';
+    const el=document.createElement('div');
+    el.className='row-ver '+cls;
+    el.onclick=()=>rowVerDetail(row,vis);
+    const xminColor=xminState==='committed'?'#10b981':xminState==='aborted'?'#ef4444':'#f59e0b';
+    const xmaxColor=row.xmax===0?'#475569':xmaxState==='committed'?'#ef4444':xmaxState==='aborted'?'#10b981':'#f59e0b';
+    el.innerHTML=`
+      <div class="rv-header">
+        <span class="rv-xmin" style="background:${xminColor}22;color:${xminColor}">xmin=${row.xmin}</span>
+        <span class="rv-xmax" style="background:${xmaxColor}22;color:${xmaxColor}">xmax=${row.xmax===0?'0 (alive)':row.xmax}</span>
+        <span class="rv-status ${vis?'status-visible':cls==='candidate'?'status-maybe':'status-dead'}">${vis?'VISIBLE':'DEAD'}</span>
+      </div>
+      <div class="rv-data">${row.data}</div>
+      <div class="rv-reason">${visReason(row)}</div>
+    `;
+    rv.appendChild(el);
+  });
+  // snapshot panel
+  const sp=document.getElementById('snapshot-panel');
+  sp.innerHTML='<div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:10px">Your snapshot at transaction 201:</div>';
+  const txns=[100,150,200,202];
+  txns.forEach(xid=>{
+    const state=states[xid];
+    const color=state==='committed'?'#10b981':state==='aborted'?'#ef4444':'#f59e0b';
+    const vis=state==='committed'?'can see rows':'cannot see rows';
+    const visColor=state==='committed'?'var(--green)':'var(--muted)';
+    sp.innerHTML+=`<div class="snap-entry">
+      <span class="snap-xid">${xid}</span>
+      <span class="snap-state" style="color:${color}">${state}</span>
+      <span class="snap-vis" style="background:${color}18;color:${visColor}">${vis}</span>
+    </div>`;
+  });
+  // update buttons
+  [100,150,200,202].forEach(xid=>{
+    const btn=document.getElementById('btn-'+xid);
+    const s=states[xid];
+    btn.className='sim-btn '+(s==='committed'?'committed':s==='aborted'?'aborted':'act');
+    btn.textContent=`txn ${xid} (${s})`;
+  });
+}
+function cycleState(xid){
+  const order=['in-progress','committed','aborted'];
+  const cur=states[xid];
+  states[xid]=order[(order.indexOf(cur)+1)%3];
+  renderSim();
+}
+function scenario(name){
+  if(name==='all_committed'){states[100]='committed';states[150]='committed';states[200]='committed';states[202]='committed';}
+  else if(name==='writer_in_progress'){states[100]='committed';states[150]='committed';states[200]='in-progress';states[202]='in-progress';}
+  else if(name==='writer_aborted'){states[100]='committed';states[150]='committed';states[200]='aborted';states[202]='aborted';}
+  else{states[100]='committed';states[150]='committed';states[200]='in-progress';states[202]='in-progress';}
+  renderSim();
+}
+function rowVerDetail(row,vis){
+  const xminState=states[row.xmin]||'committed';
+  const xmaxState=row.xmax===0?'none':states[row.xmax]||'committed';
+  const color=vis?'var(--green)':'var(--red)';
+  const xminOk=xminState==='committed';
+  const xmaxOk=xmaxState==='none'||xmaxState==='in-progress'||xmaxState==='aborted';
+  sd('detail-mvcc',color,
+    (vis?'✓ VISIBLE':'✗ NOT VISIBLE')+` — ${row.desc}`,
+    `<p><strong>Row data:</strong> ${row.data}</p>
+    <p><strong>xmin=${row.xmin}</strong> state: <strong>${xminState}</strong> → ${xminOk?'✓ Row was created, I can see it':'✗ Row not created yet (or rolled back), invisible'}</p>
+    <p><strong>xmax=${row.xmax===0?'0':row.xmax}</strong> state: ${row.xmax===0?'<strong>no deleter</strong> → ✓ Row is still alive':`<strong>${xmaxState}</strong> → ${xmaxOk?'✓ Deletion not committed yet — row still alive to me':'✗ Deletion committed — row is dead to me'}`}</p>
+    <p><strong>Combined verdict:</strong> ${vis?'Both conditions met — row is visible to my snapshot':'At least one condition failed — row is invisible'}</p>`);
+}
+function explainRule(key){
+  if(key==='xmin') sd('detail-rule','var(--cyan)','xmin — The Birth Certificate',
+    `<p>Every row gets an xmin stamp when it's inserted. xmin = the transaction ID that ran the INSERT or the UPDATE that created this version.</p>
+    <p>For a row to exist in your view, xmin's transaction must be in your "committed" list. If xmin is in-progress or aborted, the row doesn't exist for you — you can never see partial writes.</p>
+    <p>This is why dirty reads are impossible in PostgreSQL. A row with xmin=in-progress is simply invisible, as if it was never written.</p>`);
+  else sd('detail-rule','var(--amber)','xmax — The Death Certificate',
+    `<p>When a row is deleted or updated, its xmax is set to the deleting transaction's ID. Think of it as "this row was scheduled for deletion by transaction X."</p>
+    <p>But the deletion is only real to you if xmax's transaction has committed in your snapshot. If xmax is in-progress, the deletion hasn't happened yet from your perspective — you still see the row.</p>
+    <p>This is how MVCC lets you read the old version while someone else is updating. Their xmax (your "old" row's death certificate) hasn't been certified yet, so the row is still alive to you.</p>`);
+}
+
+// ─── Snapshot ───
+const snapDetails={
+  xmin_horizon:['var(--cyan)','xmin_horizon — The Safety Boundary',
+    `<p>The lowest transaction ID that was still in-progress when your snapshot was taken. Any row with xmin less than this value, if committed, is <strong>definitely visible</strong> to you — no need to check the in-progress list.</p>
+    <p>This is an optimization. Rather than checking every row's xmin against the full in-progress list, rows below xmin_horizon are fast-pathed as visible (if committed).</p>`],
+  xmax_horizon:['var(--cyan)','xmax_horizon — The Future Boundary',
+    `<p>The next transaction ID that will be assigned. Any row with xmin <strong>≥ this value</strong> was created after your snapshot — it definitely does not exist in your view.</p>
+    <p>Combined with xmin_horizon, these two numbers define the range where you need to actually check the in-progress list.</p>`],
+  xip:['var(--amber)','xip — The In-Progress List',
+    `<p>The list of transaction IDs that were running (not yet committed or aborted) at the exact moment your snapshot was taken.</p>
+    <p>Any row whose xmin is in this list is invisible to you — that transaction hasn't committed yet from your perspective. Even if it commits later, your frozen snapshot still says "in-progress."</p>
+    <p>This is why Repeatable Read gives you consistent reads: your snapshot's xip list never changes. Even when those transactions commit, your snapshot still treats them as in-progress.</p>`],
+};
+function snapDetail(key){
+  const[c,t,b]=snapDetails[key];
+  sd('detail-snap',c,t,b);
+}
+function visStep(i){
+  const details=[
+    ['var(--green)','Step 1 — Check xmin',
+      `<p>First, check if the row's creator committed before your snapshot. Look up xmin in your committed list.</p>
+      <p>If xmin is NOT committed (in-progress or aborted), stop here — the row doesn't exist for you. You'll never see a partial write.</p>
+      <p>In the example: xmin=100, txn 100 is committed → proceed to step 2.</p>`],
+    ['var(--amber)','Step 2 — Check xmax',
+      `<p>The row passed step 1 — it was born. Now check if it was killed.</p>
+      <p>If xmax=0, nobody has deleted it. Visible.</p>
+      <p>If xmax != 0, check if that transaction committed in your snapshot. If it's in-progress or aborted, the deletion hasn't happened for you — row is still alive.</p>
+      <p>In the example: xmax=200, txn 200 is in-progress → deletion not committed → row still alive.</p>`],
+    ['var(--green)','Result — Row is Visible',
+      `<p>Both checks passed:</p>
+      <p>✓ xmin committed → row was born in your timeline<br>✓ xmax not committed → row hasn't been killed in your timeline</p>
+      <p>You see name='Alice' even though someone is in the middle of changing it to 'Alice v2'. They don't block you, you don't block them.</p>`],
+  ];
+  const[c,t,b]=details[i];
+  sd('detail-vis',c,t,b);
+  document.querySelectorAll('.vis-step').forEach((el,j)=>{
+    el.style.borderColor=j===i?'var(--cyan)':'var(--border)';
+    el.style.background=j===i?'rgba(6,182,212,.06)':'var(--s1)';
+  });
+}
+
+// ─── Isolation levels ───
+const isoDetails={
+  rc:['var(--blue)','Read Committed — Per-Statement Snapshot',
+    `<p><strong>Default isolation level in PostgreSQL.</strong> Every SQL statement gets a fresh snapshot at the moment it runs.</p>
+    <p>Within one transaction, two identical SELECT statements can return different results if another transaction committed between them. This is the "non-repeatable read" phenomenon.</p>
+    <p><strong>When it's fine:</strong> Most web app queries — you read a row and display it, or you update a row in a single statement. Single-statement updates are atomic regardless.</p>
+    <p><strong>When it's dangerous:</strong> When you read a value, do application logic, then write back based on what you read. Another transaction might have changed the value between your read and write.</p>
+    <div class="fix">-- Safe at Read Committed (atomic):
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+
+-- Dangerous at Read Committed (read-compute-write):
+SELECT balance FROM accounts WHERE id = 1;  -- reads 1000
+-- another txn changes balance to 200 here
+UPDATE accounts SET balance = 900 WHERE id = 1;  -- wrong!</div>`,
+  ],
+  rr:['var(--cyan)','Repeatable Read — Transaction-Level Snapshot',
+    `<p>The snapshot is taken once, right when the transaction starts. All statements in the transaction see exactly the same state of the database, no matter how long the transaction runs or how many things commit.</p>
+    <p><strong>In PostgreSQL, Repeatable Read also prevents phantom reads</strong> — new rows inserted by other transactions into your query's result set are invisible. This is stricter than the SQL standard requires.</p>
+    <p><strong>Write conflict behavior:</strong> If you try to UPDATE a row that another transaction already updated (since your snapshot), you get: <code>ERROR: could not serialize access due to concurrent update</code>. You must retry the transaction.</p>
+    <div class="fix">BEGIN ISOLATION LEVEL REPEATABLE READ;
+-- All queries here see the same snapshot
+SELECT SUM(amount) FROM orders;   -- 50000
+SELECT COUNT(*) FROM orders;      -- 1200
+-- even if new orders are inserted between these,
+-- both numbers are from the same consistent snapshot
+COMMIT;</div>`,
+  ],
+  ser:['var(--purple)','Serializable — Full Serializability Guarantee',
+    `<p>Transactions behave as if they ran one after another, even if they ran in parallel. PostgreSQL tracks read/write dependencies between concurrent transactions and aborts one if a conflict cycle is detected.</p>
+    <p><strong>The trade-off:</strong> Some transactions will get a serialization error (<code>ERROR: could not serialize access</code>) and must be retried. Your application code must handle this.</p>
+    <p><strong>When to use it:</strong> Financial systems, medical records, booking systems — anywhere where a wrong result is unacceptable and you can handle retries.</p>
+    <div class="fix">-- Application retry pattern:
+while True:
+    try:
+        conn.execute("BEGIN ISOLATION LEVEL SERIALIZABLE")
+        # your logic here
+        conn.execute("COMMIT")
+        break  # success
+    except SerializationError:
+        conn.execute("ROLLBACK")
+        time.sleep(0.01)  # brief pause, then retry</div>`,
+  ],
+  ru:['var(--muted)','Read Uncommitted — Not Really Implemented',
+    `<p>The SQL standard defines Read Uncommitted as allowing "dirty reads" — reading data from transactions that haven't committed yet. If the writer rolls back, you read data that never officially existed.</p>
+    <p><strong>PostgreSQL's implementation:</strong> Read Uncommitted is silently treated as Read Committed. The MVCC architecture makes dirty reads structurally impossible — rows with xmin from an in-progress transaction are invisible by design.</p>
+    <p>You can set this level, but you'll get Read Committed behavior. There's no reason to use it in PostgreSQL.</p>`,
+  ],
+};
+function isoDetail(key){
+  const[c,t,b]=isoDetails[key];
+  sd('detail-iso',c,t,b);
+  document.querySelectorAll('.iso-card').forEach(e=>e.classList.remove('lit'));
+  event.currentTarget.classList.add('lit');
+}
+
+const demoDetails={
+  rc_begin:['var(--blue)','BEGIN — No Snapshot Yet (Read Committed)',`<p>At Read Committed, no snapshot is taken at BEGIN. The snapshot is taken fresh each time a statement executes. So BEGIN alone doesn't freeze anything.</p><p>This is different from Repeatable Read where BEGIN marks the snapshot point.</p>`],
+  rc_read1:['var(--blue)','First SELECT — Snapshot 1 Taken Now',`<p>A snapshot is taken at the moment this statement executes. It captures everything committed up to this instant. balance=1000 is what's committed right now.</p><p>This snapshot is <strong>discarded after this statement finishes</strong>. The next statement will get a fresh one.</p>`],
+  rc_read2:['var(--red)','Second SELECT — NEW Snapshot, Sees B\'s Commit',`<p>A brand new snapshot is taken for this statement. Since Transaction B committed between the two reads, this new snapshot includes B's change.</p><p>Result: 1500 instead of 1000. Same transaction, same query, different result. This is the non-repeatable read phenomenon.</p><p>This can be a problem if your application logic depended on the first read's value of 1000.</p>`],
+  rc_commit:['var(--blue)','COMMIT — Transaction Ends',`<p>Transaction A commits. Nothing dramatic here since it only read data.</p>`],
+  rc_b_update:['var(--amber)','Transaction B Updates the Row',`<p>B stamps xmax on the old row (balance=1000) and writes a new row version (balance=1500) with its own xmin.</p><p>At this moment, anyone whose snapshot doesn't include B yet still sees 1000. Anyone taking a new snapshot after this (but before B commits) also still sees 1000 — B hasn't committed yet.</p>`],
+  rc_b_commit:['var(--green)','Transaction B Commits — Change Now Visible',`<p>B's transaction ID is marked as committed. Any new snapshot taken after this moment will see balance=1500.</p><p>Transaction A's NEXT statement (at t=5) will take a new snapshot and see this commit. That's what causes the non-repeatable read.</p>`],
+  rr_begin:['var(--cyan)','BEGIN — Snapshot Frozen HERE (Repeatable Read)',`<p>At Repeatable Read, the snapshot is taken right at BEGIN. This snapshot is frozen for the entire transaction.</p><p>Everything committed up to this moment is visible. Everything that commits after this moment is invisible — regardless of when your statements run.</p>`],
+  rr_read1:['var(--cyan)','First SELECT — Uses the Frozen Snapshot',`<p>Uses the snapshot taken at BEGIN (t=1). balance=1000 is visible because txn 100 (which set it to 1000) was committed before t=1.</p>`],
+  rr_read2:['var(--green)','Second SELECT — Same Snapshot, Same Result',`<p>Still uses the snapshot from t=1. Even though B committed at t=4, B's commit is after the snapshot was taken — so it's invisible.</p><p>Result: 1000, same as before. This is repeatable read in action — the same query returns the same result no matter how many times you run it within the transaction.</p>`],
+  rr_commit:['var(--cyan)','COMMIT — Transaction Ends',`<p>Transaction A commits. After this, new transactions see balance=1500 (B's change). A's frozen snapshot is discarded.</p>`],
+  rr_b_update:['var(--amber)','Transaction B Updates the Row',`<p>Same as before — B creates a new row version with balance=1500. But since A's snapshot was already frozen at t=1, A will never see this regardless of when it queries.</p>`],
+  rr_b_commit:['var(--green)','Transaction B Commits',`<p>B commits at t=4. New transactions starting after t=4 will see balance=1500. But Transaction A started at t=1 with a frozen snapshot — this commit is invisible to A forever.</p><p>This is the key difference from Read Committed: A's snapshot doesn't move even though B committed.</p>`],
+};
+function demoDetail(key){
+  const[c,t,b]=demoDetails[key];
+  sd('detail-demo',c,t,b);
+}
+
+// ─── Anomalies ───
+const anomDetails={
+  dirty:['var(--green)','Dirty Read — Not Possible in PostgreSQL',
+    `<p>A dirty read means reading data from a transaction that hasn't committed yet. If that transaction rolls back, you read data that never officially existed — a ghost.</p>
+    <p><strong>Example (hypothetical, not PostgreSQL):</strong></p>
+    <div class="fix">-- Transaction B transfers $500 but hasn't committed:
+UPDATE accounts SET balance = balance - 500 WHERE id = 1;
+-- balance is now -500 in the buffer, but NOT committed
+
+-- Transaction A (dirty read level) reads:
+SELECT balance FROM accounts WHERE id = 1;
+-- reads: -500  ← this data doesn't officially exist yet!
+
+-- Transaction B rolls back. Balance returns to original.
+-- Transaction A acted on balance = -500. Wrong decision.</div>
+    <p><strong>In PostgreSQL:</strong> MVCC makes this impossible. Rows with xmin from an uncommitted transaction are simply invisible. There's no way to see them even if you wanted to.</p>`],
+  nonrep:['var(--amber)','Non-Repeatable Read — Happens at Read Committed',
+    `<p>Reading the same row twice in one transaction returns different values because another transaction committed a change between your two reads.</p>
+    <div class="fix">-- Transaction A (Read Committed):
+BEGIN;
+SELECT salary FROM employees WHERE id = 5;
+-- returns: 50000
+
+-- Transaction B commits:
+UPDATE employees SET salary = 80000 WHERE id = 5;
+COMMIT;
+
+-- Transaction A reads again:
+SELECT salary FROM employees WHERE id = 5;
+-- returns: 80000 ← different! Non-repeatable read.</div>
+    <p><strong>When this causes bugs:</strong> Your code reads a value, makes a decision based on it, then reads again expecting the same value. The inconsistency can cause logic errors.</p>
+    <p><strong>Prevention:</strong> Use <code>REPEATABLE READ</code> isolation level. The snapshot is frozen at BEGIN, so the second read always returns 50000 regardless of what B does.</p>`],
+  phantom:['#f97316','Phantom Read — New Rows Appearing Mid-Transaction',
+    `<p>Running the same query twice returns different rows (not different values) because another transaction inserted or deleted rows matching your WHERE clause.</p>
+    <div class="fix">-- Transaction A (Read Committed):
+BEGIN;
+SELECT * FROM orders WHERE user_id = 42;
+-- returns 5 rows
+
+-- Transaction B commits:
+INSERT INTO orders (user_id, amount) VALUES (42, 99.00);
+COMMIT;
+
+-- Transaction A queries again:
+SELECT * FROM orders WHERE user_id = 42;
+-- returns 6 rows ← phantom row appeared!</div>
+    <p><strong>Note the difference from non-repeatable read:</strong> The existing rows didn't change. A brand new row appeared out of nowhere — a "phantom."</p>
+    <p><strong>Prevention:</strong> <code>REPEATABLE READ</code> in PostgreSQL (stricter than SQL standard — PostgreSQL also prevents phantoms at this level). Or use <code>SERIALIZABLE</code>.</p>`],
+  lost:['var(--red)','Lost Update — Silent Data Corruption',
+    `<p>Two transactions read a value, both compute an update, both write back. Whoever writes last wins. The first write is silently overwritten and lost forever.</p>
+    <div class="fix">-- Both transactions read stock = 10 simultaneously
+
+-- Transaction A: "sell 3, write 7"
+BEGIN;
+SELECT stock FROM inventory WHERE id = 1;  -- reads 10
+UPDATE inventory SET stock = 7 WHERE id = 1;
+COMMIT;  -- stock is now 7
+
+-- Transaction B (ran at same time): "sell 5, write 5"
+BEGIN;
+SELECT stock FROM inventory WHERE id = 1;  -- also read 10
+UPDATE inventory SET stock = 5 WHERE id = 1;
+COMMIT;  -- stock is now 5. A's -3 is GONE.
+
+-- Result: stock=5. But 3+5=8 units were sold from 10.
+-- You've oversold 3 units with no error.</div>
+    <p><strong>Fix 1 — Atomic update (best):</strong></p>
+    <div class="fix">UPDATE inventory SET stock = stock - 3 WHERE id = 1;
+-- No read needed. Database handles the math atomically.</div>
+    <p><strong>Fix 2 — SELECT FOR UPDATE:</strong></p>
+    <div class="fix">BEGIN;
+SELECT stock FROM inventory WHERE id = 1 FOR UPDATE;
+-- Second transaction BLOCKS here until first commits.
+UPDATE inventory SET stock = stock - 3 WHERE id = 1;
+COMMIT;</div>`],
+  serial:['var(--purple)','Serialization Anomaly — Collectively Wrong',
+    `<p>Each transaction individually looks correct. But together, their combined result is something that could never happen if they ran one at a time.</p>
+    <div class="fix">-- Rule: at least one doctor must be on-call
+-- Current state: Alice=on_call, Bob=on_call
+
+-- Transaction A:
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+SELECT COUNT(*) FROM doctors WHERE on_call=true;  -- sees 2
+-- "others are on call, I can go off"
+UPDATE doctors SET on_call=false WHERE name='Alice';
+COMMIT;  -- succeeds
+
+-- Transaction B (concurrent):
+BEGIN ISOLATION LEVEL REPEATABLE READ;
+SELECT COUNT(*) FROM doctors WHERE on_call=true;  -- also sees 2!
+-- "others are on call, I can go off"
+UPDATE doctors SET on_call=false WHERE name='Bob';
+COMMIT;  -- succeeds!
+
+-- Result: BOTH off call. Zero doctors on call. Rule violated.
+-- Neither transaction was "wrong" on its own.</div>
+    <p><strong>Prevention:</strong> SERIALIZABLE isolation. PostgreSQL detects the read/write dependency cycle (A read Bob's row, B read Alice's row) and aborts one with a serialization error.</p>
+    <div class="fix">BEGIN ISOLATION LEVEL SERIALIZABLE;
+-- ... same logic ...
+COMMIT;  -- or: ERROR: could not serialize access
+-- Retry the aborted transaction. It will now see only 1 doctor on call
+-- and correctly refuse to go off-call.</div>`],
+};
+function anomDetail(key){
+  const[c,t,b]=anomDetails[key];
+  sd('detail-anom',c,t,b);
+  document.querySelectorAll('.anom-card').forEach(e=>e.classList.remove('lit'));
+  event.currentTarget.classList.add('lit');
+}
+
+// ─── Choose ───
+const chooseDetails={
+  web_app:['var(--blue)','Read Committed — For Typical Web Apps',
+    `<p>Simple request-response pattern: read some data, display it, maybe update a single row. Each request is short-lived. Individual statements are atomic.</p>
+    <div class="fix">-- Typical web app pattern (safe at Read Committed):
+SELECT * FROM products WHERE id = 42;       -- read
+UPDATE products SET views = views + 1 WHERE id = 42;  -- atomic update
+INSERT INTO cart_items (user_id, product_id) VALUES (1, 42); -- insert</div>
+    <p>Don't overthink it. If your transaction is one or two statements and you're not doing read-compute-write logic, Read Committed is correct and efficient.</p>`],
+  report:['var(--cyan)','Repeatable Read — For Consistent Reports',
+    `<p>You're generating a report with multiple queries. The numbers need to be internally consistent — COUNT and SUM should describe the same set of rows.</p>
+    <div class="fix">BEGIN ISOLATION LEVEL REPEATABLE READ;
+
+-- All three queries see the exact same snapshot.
+-- No risk of rows appearing/disappearing between them.
+SELECT SUM(amount)  FROM orders WHERE month='Jan';   -- 50000
+SELECT COUNT(*)     FROM orders WHERE month='Jan';   -- 1200
+SELECT AVG(amount)  FROM orders WHERE month='Jan';   -- 41.67
+
+-- 50000 / 1200 = 41.67 ✓ mathematically consistent
+
+COMMIT;</div>
+    <p>Without Repeatable Read, new orders inserted between your queries could make the sum and count inconsistent.</p>`],
+  transfer:['var(--amber)','Atomic UPDATE — For Money Movement',
+    `<p>The safest pattern for financial operations doesn't require a special isolation level — it avoids the read-compute-write pattern entirely. Let the database do the math atomically.</p>
+    <div class="fix">-- WRONG: read-compute-write (lost update risk)
+BEGIN;
+SELECT balance FROM accounts WHERE id = 1;  -- reads 1000
+-- another txn changes it here...
+UPDATE accounts SET balance = 900 WHERE id = 1;  -- wrong!
+COMMIT;
+
+-- RIGHT: atomic update (no race condition possible)
+BEGIN;
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+UPDATE accounts SET balance = balance + 100 WHERE id = 2;
+COMMIT;
+-- Both updates succeed or both roll back. No lost update possible.</div>
+    <p>If you need to validate before updating (e.g. "check balance ≥ withdrawal amount"), use <code>SELECT FOR UPDATE</code> to lock the row between your check and your update.</p>`],
+  inventory:['var(--red)','SELECT FOR UPDATE — For Inventory/Booking',
+    `<p>You need to check availability, then reserve it. The gap between check and reservation must be protected from concurrent changes.</p>
+    <div class="fix">BEGIN;
+
+-- FOR UPDATE locks the row immediately.
+-- Second transaction trying to book the same seat
+-- will BLOCK on this line until you commit or rollback.
+SELECT * FROM seats WHERE id = 42 AND available = true FOR UPDATE;
+
+-- If you got a row, the seat is yours to modify:
+UPDATE seats SET available = false, user_id = 99 WHERE id = 42;
+
+COMMIT;  -- lock released. Other transactions unblock and see available=false.</div>
+    <p>Without FOR UPDATE: two users could both see available=true, both decide to book, and both confirm — double booking. FOR UPDATE prevents this by serializing access to that specific row.</p>`],
+  critical:['var(--purple)','Serializable — For Maximum Correctness',
+    `<p>Use when correctness is non-negotiable and you can build retry logic. Serializable gives you the strongest guarantee: the result is always as if transactions ran one at a time.</p>
+    <div class="fix">-- Application must handle serialization errors:
+import psycopg2
+
+def transfer_with_retry(from_id, to_id, amount, max_retries=3):
+    for attempt in range(max_retries):
+        try:
+            with conn.cursor() as cur:
+                cur.execute("BEGIN ISOLATION LEVEL SERIALIZABLE")
+                cur.execute("SELECT balance FROM accounts WHERE id=%s FOR UPDATE", [from_id])
+                balance = cur.fetchone()[0]
+                if balance < amount:
+                    conn.rollback()
+                    raise InsufficientFunds()
+                cur.execute("UPDATE accounts SET balance=balance-%s WHERE id=%s", [amount, from_id])
+                cur.execute("UPDATE accounts SET balance=balance+%s WHERE id=%s", [amount, to_id])
+                conn.commit()
+                return  # success
+        except psycopg2.errors.SerializationFailure:
+            conn.rollback()
+            if attempt == max_retries - 1:
+                raise  # give up after retries</div>`],
+};
+function chooseDetail(key){
+  const[c,t,b]=chooseDetails[key];
+  sd('detail-choose',c,t,b);
+}
+function tableRow(key){
+  const map={rc:'web_app',rr:'report',ser:'critical'};
+  chooseDetail(map[key]||'web_app');
+}
+
+// init
+renderSim();
+</script>
+</body>
+</html>
