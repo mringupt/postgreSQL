@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SELECT FOR UPDATE & Serializable — Visual Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg:#060a12;--s1:#0c1220;--s2:#111a2e;--s3:#162038;
+  --border:#1a2d48;--border2:#243d60;
+  --text:#dde8f5;--muted:#3a5270;
+  --mono:'JetBrains Mono',monospace;--sans:'Syne',sans-serif;
+  --cyan:#06b6d4;--green:#10b981;--amber:#f59e0b;
+  --red:#ef4444;--purple:#8b5cf6;--blue:#3b82f6;--pink:#ec4899;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh}
+.wrap{max-width:1000px;margin:0 auto;padding:40px 20px 80px}
+.eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.2em;color:var(--muted);text-transform:uppercase;margin-bottom:12px}
+h1{font-size:clamp(22px,4vw,42px);font-weight:800;line-height:1.1;margin-bottom:8px}
+h1 .hi{color:var(--cyan)}
+.sub{font-size:13px;color:var(--muted);margin-bottom:36px;line-height:1.6}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--border);margin-bottom:28px}
+.tab{font-family:var(--mono);font-size:11px;padding:8px 16px;cursor:pointer;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;transition:all .15s;white-space:nowrap}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--cyan);border-bottom-color:var(--cyan)}
+.view{display:none}
+.view.active{display:block;animation:up .18s ease}
+@keyframes up{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+.sec{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-bottom:14px;display:flex;align-items:center;gap:10px}
+.sec::after{content:'';flex:1;height:1px;background:var(--border)}
+.detail{background:var(--s1);border:1px solid var(--border2);border-left:3px solid var(--cyan);border-radius:6px;padding:18px 20px;margin-bottom:18px;transition:border-left-color .2s}
+.detail.empty{opacity:.3;border-left-color:var(--border)}
+.detail h3{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px}
+.detail p{font-size:13px;color:#6a8aaa;line-height:1.75;margin-bottom:7px}
+.detail p:last-child{margin-bottom:0}
+.detail strong{color:var(--text)}
+.detail code{font-family:var(--mono);font-size:11px;background:rgba(6,182,212,.1);color:#7dd3fc;padding:1px 5px;border-radius:3px}
+.fix{font-family:var(--mono);font-size:11px;background:rgba(16,185,129,.07);border:1px solid rgba(16,185,129,.2);border-radius:4px;padding:10px 12px;color:#6ee7b7;line-height:2;margin-top:8px;white-space:pre-wrap}
+.tag{display:inline-block;font-size:10px;font-family:var(--mono);padding:2px 8px;border-radius:2px;border:1px solid;margin:3px 2px 0}
+.t-ok{color:var(--green);border-color:rgba(16,185,129,.3);background:rgba(16,185,129,.07)}
+.t-warn{color:var(--amber);border-color:rgba(245,158,11,.3);background:rgba(245,158,11,.07)}
+.t-bad{color:var(--red);border-color:rgba(239,68,68,.3);background:rgba(239,68,68,.07)}
+.t-info{color:var(--cyan);border-color:rgba(6,182,212,.3);background:rgba(6,182,212,.07)}
+
+/* ── RACE CONDITION SIMULATOR ── */
+.race-sim{background:var(--s2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:16px}
+.race-header{background:var(--s1);padding:12px 16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.race-title{font-family:var(--mono);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+.mode-btn{font-family:var(--mono);font-size:10px;padding:5px 14px;border-radius:4px;border:1px solid var(--border2);background:var(--s2);color:var(--muted);cursor:pointer;transition:all .15s}
+.mode-btn.active{background:rgba(6,182,212,.12);border-color:rgba(6,182,212,.4);color:var(--cyan)}
+.race-grid{display:grid;grid-template-columns:1fr 1fr;gap:0}
+.race-lane{padding:16px}
+.race-lane:first-child{border-right:1px solid var(--border)}
+.lane-title{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.lane-title .dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+
+.step-list{display:flex;flex-direction:column;gap:6px}
+.step{border-radius:5px;padding:8px 12px;font-family:var(--mono);font-size:11px;line-height:1.6;cursor:pointer;transition:all .2s;border:1px solid transparent;opacity:.4}
+.step.active{opacity:1}
+.step.done{opacity:.6}
+.step.blocked{animation:pulse 1.2s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.8}50%{opacity:.4}}
+
+/* seat grid */
+.seats-panel{background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px}
+.seats-title{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px}
+.seats-grid{display:grid;grid-template-columns:repeat(10,1fr);gap:5px}
+.seat{width:100%;aspect-ratio:1;border-radius:4px;border:1px solid var(--border);background:var(--s2);display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:9px;cursor:pointer;transition:all .3s;position:relative}
+.seat.available{background:rgba(16,185,129,.15);border-color:rgba(16,185,129,.4);color:var(--green)}
+.seat.locked-a{background:rgba(59,130,246,.2);border-color:rgba(59,130,246,.6);color:var(--blue);animation:lockpulse 1s ease-in-out infinite}
+.seat.locked-b{background:rgba(245,158,11,.2);border-color:rgba(245,158,11,.6);color:var(--amber);animation:lockpulse 1s ease-in-out infinite}
+.seat.booked{background:rgba(239,68,68,.15);border-color:rgba(239,68,68,.35);color:var(--red)}
+.seat.double{background:rgba(139,92,246,.3);border-color:rgba(139,92,246,.7);color:var(--purple);animation:lockpulse .5s ease-in-out infinite}
+@keyframes lockpulse{0%,100%{opacity:1}50%{opacity:.6}}
+
+/* variant cards */
+.variant-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin-bottom:14px}
+.variant-card{background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px;cursor:pointer;transition:all .15s}
+.variant-card:hover,.variant-card.lit{border-color:var(--vc);box-shadow:0 0 16px var(--vcg)}
+.vc-name{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--vc);margin-bottom:4px}
+.vc-keyword{font-family:var(--mono);font-size:10px;background:var(--s2);border-radius:3px;padding:4px 8px;color:#64748b;margin-bottom:8px;display:inline-block}
+.vc-desc{font-size:12px;color:var(--muted);line-height:1.55}
+
+/* serializable dep graph */
+.dep-sim{background:var(--s2);border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:16px}
+.dep-header{background:var(--s1);padding:12px 16px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:10px;color:var(--muted);display:flex;align-items:center;gap:10px}
+.dep-body{padding:16px;display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.dep-txns{display:flex;flex-direction:column;gap:8px}
+.dep-txn{background:var(--s3);border:1px solid var(--border);border-radius:6px;padding:12px;cursor:pointer;transition:all .15s}
+.dep-txn:hover,.dep-txn.lit{border-color:var(--dc);box-shadow:0 0 12px var(--dcg)}
+.dep-txn-name{font-family:var(--mono);font-size:11px;font-weight:700;color:var(--dc);margin-bottom:6px}
+.dep-txn-ops{font-family:var(--mono);font-size:10px;color:#475569;line-height:1.8}
+.dep-txn-ops .r{color:#7dd3fc}.dep-txn-ops .w{color:#86efac}
+
+.dep-graph{background:var(--s3);border:1px solid var(--border);border-radius:6px;padding:14px;display:flex;flex-direction:column;align-items:center;gap:10px}
+.dep-graph-title{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;align-self:flex-start}
+.graph-nodes{position:relative;width:180px;height:180px;margin:10px auto}
+.gnode{position:absolute;width:50px;height:50px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-family:var(--mono);font-size:12px;font-weight:700;cursor:pointer;transition:all .3s;border:2px solid}
+.garrow{position:absolute;font-size:11px;font-family:var(--mono);color:var(--muted);text-align:center;pointer-events:none}
+.cycle-warning{font-family:var(--mono);font-size:11px;text-align:center;padding:8px 12px;border-radius:4px;transition:all .3s}
+
+/* timeline for serializable */
+.ser-timeline{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;background:var(--s2);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px}
+.ser-col{padding:14px}
+.ser-col:not(:last-child){border-right:1px solid var(--border)}
+.ser-col-title{font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px}
+.ser-event{background:var(--s3);border:1px solid var(--border);border-radius:4px;padding:8px 10px;margin-bottom:6px;font-family:var(--mono);font-size:10px;line-height:1.7;cursor:pointer;transition:all .12s}
+.ser-event:hover{border-color:var(--border2)}
+.ser-event.lit{border-color:var(--ec);background:rgba(var(--ecrgb),.08)}
+
+@media(max-width:640px){
+  .race-grid,.dep-body,.ser-timeline{grid-template-columns:1fr}
+  .race-lane:first-child{border-right:none;border-bottom:1px solid var(--border)}
+  .dep-body>div:first-child{border-bottom:1px solid var(--border)}
+  .ser-col:not(:last-child){border-right:none;border-bottom:1px solid var(--border)}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="eyebrow">postgresql · locking · serializable · visual guide</div>
+<h1>SELECT FOR UPDATE<br><span class="hi">& Serializable</span></h1>
+<p class="sub">See race conditions happen, watch locks prevent them, and understand how Serializable detects conflicts without locking.</p>
+
+<div class="tabs">
+  <div class="tab active" onclick="st('race')">Race Condition</div>
+  <div class="tab" onclick="st('variants')">FOR UPDATE Variants</div>
+  <div class="tab" onclick="st('tickets')">Ticket Booking</div>
+  <div class="tab" onclick="st('serial')">Serializable Explained</div>
+  <div class="tab" onclick="st('compare')">Comparison</div>
+</div>
+
+<!-- ══ RACE CONDITION ══ -->
+<div class="view active" id="view-race">
+  <div class="sec">see the difference — toggle mode then step through</div>
+
+  <div class="race-sim">
+    <div class="race-header">
+      <span class="race-title">Mode:</span>
+      <div class="mode-btn active" id="mode-unsafe" onclick="setMode('unsafe')">Without FOR UPDATE</div>
+      <div class="mode-btn" id="mode-safe" onclick="setMode('safe')">With FOR UPDATE</div>
+      <div class="mode-btn" id="mode-skip" onclick="setMode('skip')">With SKIP LOCKED</div>
+    </div>
+
+    <div style="padding:12px 16px;border-bottom:1px solid var(--border)">
+      <div class="seats-title">Seat status</div>
+      <div class="seats-grid" id="seat-display"></div>
+      <div style="display:flex;gap:14px;margin-top:8px;font-family:var(--mono);font-size:9px;color:var(--muted)">
+        <span><span style="color:var(--green)">■</span> available</span>
+        <span><span style="color:var(--blue)">■</span> locked by A</span>
+        <span><span style="color:var(--amber)">■</span> locked by B</span>
+        <span><span style="color:var(--red)">■</span> booked</span>
+        <span><span style="color:var(--purple)">■</span> double-booked!</span>
+      </div>
+    </div>
+
+    <div class="race-grid">
+      <div class="race-lane">
+        <div class="lane-title"><span class="dot" style="background:var(--blue)"></span>Transaction A — User Alice</div>
+        <div class="step-list" id="steps-a"></div>
+      </div>
+      <div class="race-lane">
+        <div class="lane-title"><span class="dot" style="background:var(--amber)"></span>Transaction B — User Bob</div>
+        <div class="step-list" id="steps-b"></div>
+      </div>
+    </div>
+
+    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">Step through:</span>
+      <div onclick="prevStep()" style="font-family:var(--mono);font-size:10px;padding:5px 12px;border-radius:4px;border:1px solid var(--border2);background:var(--s2);color:var(--muted);cursor:pointer">← prev</div>
+      <div onclick="nextStep()" style="font-family:var(--mono);font-size:10px;padding:5px 14px;border-radius:4px;border:1px solid rgba(6,182,212,.4);background:rgba(6,182,212,.1);color:var(--cyan);cursor:pointer">next →</div>
+      <div onclick="resetSim()" style="font-family:var(--mono);font-size:10px;padding:5px 12px;border-radius:4px;border:1px solid var(--border2);background:var(--s2);color:var(--muted);cursor:pointer">reset</div>
+      <span id="step-label" style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-left:auto"></span>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-race">
+    <h3>← Step through the simulation above</h3>
+    <p>Watch what happens with and without FOR UPDATE. Toggle the mode and step through again to see the difference.</p>
+  </div>
+</div>
+
+<!-- ══ VARIANTS ══ -->
+<div class="view" id="view-variants">
+  <div class="sec">four variants — click each</div>
+
+  <div class="variant-grid">
+    <div class="variant-card" style="--vc:var(--blue);--vcg:rgba(59,130,246,.15)" onclick="varDetail('fu')">
+      <div class="vc-name">FOR UPDATE</div>
+      <div class="vc-keyword">SELECT ... FOR UPDATE</div>
+      <div class="vc-desc">Locks the row. Others block and wait until you commit. Most common variant.</div>
+    </div>
+    <div class="variant-card" style="--vc:var(--green);--vcg:rgba(16,185,129,.15)" onclick="varDetail('skip')">
+      <div class="vc-name">SKIP LOCKED</div>
+      <div class="vc-keyword">FOR UPDATE SKIP LOCKED</div>
+      <div class="vc-desc">Skip rows that are already locked. Get the next available one. Ideal for ticket/job queues.</div>
+    </div>
+    <div class="variant-card" style="--vc:var(--amber);--vcg:rgba(245,158,11,.15)" onclick="varDetail('nowait')">
+      <div class="vc-name">NOWAIT</div>
+      <div class="vc-keyword">FOR UPDATE NOWAIT</div>
+      <div class="vc-desc">If the row is locked, throw an error immediately. Don't wait at all.</div>
+    </div>
+    <div class="variant-card" style="--vc:var(--purple);--vcg:rgba(139,92,246,.15)" onclick="varDetail('share')">
+      <div class="vc-name">FOR SHARE</div>
+      <div class="vc-keyword">SELECT ... FOR SHARE</div>
+      <div class="vc-desc">Weaker lock. Others can also read with FOR SHARE. Only blocks FOR UPDATE writers.</div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-variant">
+    <h3>← Click a variant to see when to use it</h3>
+  </div>
+
+  <div class="sec">lock compatibility — what blocks what</div>
+  <div style="overflow-x:auto;margin-bottom:14px">
+  <table style="border-collapse:collapse;font-family:var(--mono);font-size:11px;width:100%">
+    <thead>
+      <tr>
+        <th style="padding:10px 14px;background:var(--s2);border:1px solid var(--border);color:var(--muted)">Holder →<br>Requester ↓</th>
+        <th style="padding:10px 14px;background:var(--s2);border:1px solid var(--border);color:var(--blue)">FOR UPDATE</th>
+        <th style="padding:10px 14px;background:var(--s2);border:1px solid var(--border);color:var(--purple)">FOR SHARE</th>
+        <th style="padding:10px 14px;background:var(--s2);border:1px solid var(--border);color:#64748b">Plain SELECT</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr style="cursor:pointer" onclick="lockDetail('fu_fu')" onmouseover="this.style.background='rgba(59,130,246,.04)'" onmouseout="this.style.background=''">
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--blue);font-weight:700">FOR UPDATE</td>
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--red);text-align:center">BLOCKS</td>
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--red);text-align:center">BLOCKS</td>
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--green);text-align:center">OK</td>
+      </tr>
+      <tr style="cursor:pointer" onclick="lockDetail('sh_fu')" onmouseover="this.style.background='rgba(139,92,246,.04)'" onmouseout="this.style.background=''">
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--purple);font-weight:700">FOR SHARE</td>
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--red);text-align:center">BLOCKS</td>
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--green);text-align:center">OK</td>
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--green);text-align:center">OK</td>
+      </tr>
+      <tr style="cursor:pointer" onclick="lockDetail('sel_fu')" onmouseover="this.style.background='rgba(100,116,139,.04)'" onmouseout="this.style.background=''">
+        <td style="padding:10px 14px;border:1px solid var(--border);color:#64748b;font-weight:700">Plain SELECT</td>
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--green);text-align:center">OK</td>
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--green);text-align:center">OK</td>
+        <td style="padding:10px 14px;border:1px solid var(--border);color:var(--green);text-align:center">OK</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="detail empty" id="detail-lock">
+    <h3>← Click a row in the table</h3>
+  </div>
+</div>
+
+<!-- ══ TICKETS ══ -->
+<div class="view" id="view-tickets">
+  <div class="sec">ticket booking — 500 concurrent users, 100 seats</div>
+
+  <div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px">
+    <div style="padding:10px 16px;border-bottom:1px solid var(--border);font-family:var(--mono);font-size:10px;color:var(--muted)">
+      Click each approach to see what happens
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0">
+
+      <div style="padding:14px 16px;border-right:1px solid var(--border);cursor:pointer;transition:background .15s" onmouseover="this.style.background='rgba(239,68,68,.04)'" onmouseout="this.style.background=''" onclick="ticketApproach('wrong')">
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--red);margin-bottom:8px">❌ Wrong approach</div>
+        <div style="font-family:var(--mono);font-size:10px;color:#475569;line-height:1.9">
+          BEGIN;<br>
+          SELECT * FROM seats<br>
+          WHERE available=true<br>
+          LIMIT 1;<br>
+          <br>
+          UPDATE seats<br>
+          SET available=false<br>
+          WHERE id=?;<br>
+          COMMIT;
+        </div>
+      </div>
+
+      <div style="padding:14px 16px;border-right:1px solid var(--border);cursor:pointer;transition:background .15s" onmouseover="this.style.background='rgba(245,158,11,.04)'" onmouseout="this.style.background=''" onclick="ticketApproach('wait')">
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--amber);margin-bottom:8px">⚠️ Works, but slow</div>
+        <div style="font-family:var(--mono);font-size:10px;color:#475569;line-height:1.9">
+          BEGIN;<br>
+          SELECT * FROM seats<br>
+          WHERE available=true<br>
+          LIMIT 1<br>
+          <span style="color:var(--amber)">FOR UPDATE;</span><br>
+          <br>
+          UPDATE seats<br>
+          SET available=false<br>
+          WHERE id=?;<br>
+          COMMIT;
+        </div>
+      </div>
+
+      <div style="padding:14px 16px;cursor:pointer;transition:background .15s" onmouseover="this.style.background='rgba(16,185,129,.04)'" onmouseout="this.style.background=''" onclick="ticketApproach('skip')">
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--green);margin-bottom:8px">✓ Correct & fast</div>
+        <div style="font-family:var(--mono);font-size:10px;color:#475569;line-height:1.9">
+          BEGIN;<br>
+          SELECT * FROM seats<br>
+          WHERE available=true<br>
+          LIMIT 1<br>
+          <span style="color:var(--green)">FOR UPDATE</span><br>
+          <span style="color:var(--green)">SKIP LOCKED;</span><br>
+          <br>
+          UPDATE seats<br>
+          SET available=false<br>
+          WHERE id=?;<br>
+          COMMIT;
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-ticket">
+    <h3>← Click an approach to understand it</h3>
+  </div>
+
+  <div class="sec">what happens with 500 concurrent users</div>
+  <div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:16px;margin-bottom:14px">
+    <div id="concurrent-demo" style="font-family:var(--mono);font-size:11px;color:var(--muted);line-height:2">
+      Click an approach above to see what happens with 500 concurrent users
+    </div>
+  </div>
+
+  <div class="sec">the complete booking function</div>
+  <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;overflow:hidden;margin-bottom:14px">
+    <div style="padding:8px 14px;background:var(--s2);border-bottom:1px solid var(--border);font-family:var(--mono);font-size:10px;color:var(--muted)">production-ready booking — click each section</div>
+    <div style="padding:14px 16px;font-family:var(--mono);font-size:11px;line-height:2.1">
+      <div style="color:#7dd3fc;cursor:pointer" onclick="codeDetail('begin')">BEGIN;</div>
+      <div style="color:#475569">-- Grab one seat atomically. SKIP LOCKED means:</div>
+      <div style="color:#475569">-- "if a seat is being booked right now, skip it"</div>
+      <div style="cursor:pointer" onclick="codeDetail('select_skip')">
+        <span style="color:#7dd3fc">SELECT</span> <span style="color:#fde68a">id</span>
+        <span style="color:#7dd3fc">FROM</span> <span style="color:#fde68a">seats</span><br>
+        &nbsp;<span style="color:#7dd3fc">WHERE</span> event_id = <span style="color:#86efac">42</span>
+        <span style="color:#7dd3fc">AND</span> available = <span style="color:#86efac">true</span><br>
+        &nbsp;<span style="color:#7dd3fc">LIMIT</span> <span style="color:#86efac">1</span><br>
+        &nbsp;<span style="color:#f59e0b">FOR UPDATE SKIP LOCKED</span>;
+      </div>
+      <br>
+      <div style="color:#475569;cursor:pointer" onclick="codeDetail('null_check')">-- If NULL → all seats locked or sold. Return "sold out".</div>
+      <div style="cursor:pointer;color:#c084fc" onclick="codeDetail('null_check')">IF seat_id IS NULL THEN ROLLBACK; RETURN 'sold out'; END IF;</div>
+      <br>
+      <div style="cursor:pointer" onclick="codeDetail('update')">
+        <span style="color:#7dd3fc">UPDATE</span> <span style="color:#fde68a">seats</span>
+        <span style="color:#7dd3fc">SET</span><br>
+        &nbsp;&nbsp;available = <span style="color:#86efac">false</span>,<br>
+        &nbsp;&nbsp;user_id = <span style="color:#86efac">current_user_id</span>,<br>
+        &nbsp;&nbsp;booked_at = <span style="color:#c084fc">NOW()</span><br>
+        <span style="color:#7dd3fc">WHERE</span> id = seat_id;
+      </div>
+      <br>
+      <div style="color:#7dd3fc;cursor:pointer" onclick="codeDetail('commit')">COMMIT; -- lock released, seat visible as booked to everyone</div>
+    </div>
+  </div>
+  <div class="detail empty" id="detail-code">
+    <h3>← Click a line in the query above</h3>
+  </div>
+</div>
+
+<!-- ══ SERIALIZABLE ══ -->
+<div class="view" id="view-serial">
+  <div class="sec">serializable — no locking, just dependency tracking</div>
+
+  <div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:14px;font-size:13px;color:var(--muted);line-height:1.75">
+    Serializable does <strong style="color:var(--text)">not lock rows</strong>. All transactions run simultaneously and freely read/write. PostgreSQL secretly builds a <strong style="color:var(--cyan)">dependency graph</strong> as they run. If it finds a cycle — meaning the result is impossible to explain as any sequential ordering — it aborts <strong style="color:var(--amber)">one</strong> transaction.
+  </div>
+
+  <div class="dep-sim">
+    <div class="dep-header">
+      <span style="color:var(--cyan)">■</span>
+      Dependency graph — click transactions to see what they read and write
+      <span style="margin-left:auto;font-size:9px">Read (R) → Write (W) dependencies tracked automatically</span>
+    </div>
+    <div class="dep-body">
+      <div class="dep-txns">
+        <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px">Three transactions running simultaneously</div>
+        <div class="dep-txn" style="--dc:var(--blue);--dcg:rgba(59,130,246,.2)" id="dtxn-a" onclick="depTxn('a')">
+          <div class="dep-txn-name">Transaction A</div>
+          <div class="dep-txn-ops">
+            <span class="r">READ</span>  doctors WHERE on_call=true<br>
+            <span class="w">WRITE</span> UPDATE alice SET on_call=false
+          </div>
+        </div>
+        <div class="dep-txn" style="--dc:var(--amber);--dcg:rgba(245,158,11,.2)" id="dtxn-b" onclick="depTxn('b')">
+          <div class="dep-txn-name">Transaction B</div>
+          <div class="dep-txn-ops">
+            <span class="r">READ</span>  doctors WHERE on_call=true<br>
+            <span class="w">WRITE</span> UPDATE bob SET on_call=false
+          </div>
+        </div>
+        <div class="dep-txn" style="--dc:var(--green);--dcg:rgba(16,185,129,.2)" id="dtxn-c" onclick="depTxn('c')">
+          <div class="dep-txn-name">Transaction C (no conflict)</div>
+          <div class="dep-txn-ops">
+            <span class="r">READ</span>  orders WHERE region='north'<br>
+            <span class="w">WRITE</span> UPDATE orders SET shipped=true
+          </div>
+        </div>
+      </div>
+
+      <div class="dep-graph">
+        <div class="dep-graph-title">Dependency graph</div>
+        <div class="graph-nodes" id="dep-graph-canvas">
+          <!-- SVG arrows -->
+          <svg style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none" id="dep-svg"></svg>
+          <div class="gnode" id="gn-a" style="top:10px;left:65px;background:rgba(59,130,246,.15);border-color:rgba(59,130,246,.5);color:var(--blue)">A</div>
+          <div class="gnode" id="gn-b" style="bottom:10px;left:10px;background:rgba(245,158,11,.15);border-color:rgba(245,158,11,.5);color:var(--amber)">B</div>
+          <div class="gnode" id="gn-c" style="bottom:10px;right:10px;background:rgba(16,185,129,.15);border-color:rgba(16,185,129,.5);color:var(--green)">C</div>
+        </div>
+        <div class="cycle-warning" id="cycle-warn" style="background:rgba(239,68,68,.1);border:1px solid rgba(239,68,68,.3);color:var(--red);opacity:0;transition:opacity .3s">
+          ⚠ Cycle detected! A → B → A<br>One transaction will be aborted.
+        </div>
+        <div style="font-family:var(--mono);font-size:9px;color:var(--muted);margin-top:6px;text-align:center">
+          Arrow = "I read data that you wrote"<br>= dependency
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-dep">
+    <h3>← Click a transaction to understand its dependencies</h3>
+  </div>
+
+  <div class="sec">step through a serializable conflict</div>
+
+  <div class="ser-timeline">
+    <div class="ser-col">
+      <div class="ser-col-title" style="color:var(--blue)">Transaction A</div>
+      <div class="ser-event" style="--ec:var(--blue);--ecrgb:59,130,246" onclick="serEvent('a1')">
+        <span style="color:var(--blue)">t=1</span> BEGIN SERIALIZABLE;<br>
+        Snapshot frozen here.
+      </div>
+      <div class="ser-event" style="--ec:var(--blue);--ecrgb:59,130,246" onclick="serEvent('a2')">
+        <span style="color:var(--blue)">t=2</span> SELECT COUNT(*)<br>
+        FROM doctors<br>
+        WHERE on_call=true;<br>
+        <span style="color:var(--green)">→ returns 2</span>
+      </div>
+      <div class="ser-event" style="--ec:var(--blue);--ecrgb:59,130,246" onclick="serEvent('a3')">
+        <span style="color:var(--blue)">t=5</span> UPDATE doctors<br>
+        SET on_call=false<br>
+        WHERE name='Alice';
+      </div>
+      <div class="ser-event" style="--ec:var(--blue);--ecrgb:59,130,246" onclick="serEvent('a4')">
+        <span style="color:var(--blue)">t=6</span> COMMIT;<br>
+        <span style="color:var(--green)">✓ succeeds</span>
+      </div>
+    </div>
+
+    <div class="ser-col">
+      <div class="ser-col-title" style="color:var(--amber)">Transaction B</div>
+      <div class="ser-event" style="--ec:var(--amber);--ecrgb:245,158,11" onclick="serEvent('b1')">
+        <span style="color:var(--amber)">t=1</span> BEGIN SERIALIZABLE;<br>
+        Snapshot frozen here.
+      </div>
+      <div class="ser-event" style="--ec:var(--amber);--ecrgb:245,158,11" onclick="serEvent('b2')">
+        <span style="color:var(--amber)">t=3</span> SELECT COUNT(*)<br>
+        FROM doctors<br>
+        WHERE on_call=true;<br>
+        <span style="color:var(--green)">→ returns 2 (same snapshot)</span>
+      </div>
+      <div class="ser-event" style="--ec:var(--amber);--ecrgb:245,158,11" onclick="serEvent('b3')">
+        <span style="color:var(--amber)">t=4</span> UPDATE doctors<br>
+        SET on_call=false<br>
+        WHERE name='Bob';
+      </div>
+      <div class="ser-event" style="--ec:var(--red);--ecrgb:239,68,68" onclick="serEvent('b4')">
+        <span style="color:var(--red)">t=7</span> COMMIT;<br>
+        <span style="color:var(--red)">ERROR: could not serialize</span>
+      </div>
+    </div>
+
+    <div class="ser-col">
+      <div class="ser-col-title" style="color:var(--muted)">Why it's aborted</div>
+      <div class="ser-event" style="cursor:default;opacity:.7" onclick="serEvent('why1')">
+        <span style="color:var(--cyan)">Deps tracked:</span><br>
+        A read rows B wrote to<br>
+        B read rows A wrote to
+      </div>
+      <div class="ser-event" style="cursor:default;opacity:.7" onclick="serEvent('why2')">
+        <span style="color:var(--cyan)">Cycle detected:</span><br>
+        A → B → A<br>
+        Impossible sequentially
+      </div>
+      <div class="ser-event" style="cursor:default;opacity:.7" onclick="serEvent('why3')">
+        <span style="color:var(--cyan)">If sequential:</span><br>
+        A first → B sees 1 doctor<br>
+        → B would NOT go off call<br>
+        Rule preserved ✓
+      </div>
+      <div class="ser-event" style="cursor:default;opacity:.7" onclick="serEvent('why4')">
+        <span style="color:var(--cyan)">B retries after abort:</span><br>
+        Reads count=1 now<br>
+        Logic: "only 1, stay on call"<br>
+        <span style="color:var(--green)">Rule preserved ✓</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="detail empty" id="detail-ser">
+    <h3>← Click any event in the timeline</h3>
+    <p>Serializable tracks dependencies between transactions. When a cycle is detected, one transaction is aborted to preserve the "as if sequential" guarantee.</p>
+  </div>
+</div>
+
+<!-- ══ COMPARISON ══ -->
+<div class="view" id="view-compare">
+  <div class="sec">which tool solves which problem — click each row</div>
+
+  <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="compDetail('atomic')">
+      <div style="display:grid;grid-template-columns:180px 1fr 140px;gap:12px;align-items:center">
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--green)">Atomic UPDATE</div>
+        <div style="font-size:12px;color:var(--muted)">Increment/decrement without reading first. No race condition possible.</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--green);text-align:right">balance=balance-100</div>
+      </div>
+    </div>
+
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="compDetail('fu')">
+      <div style="display:grid;grid-template-columns:180px 1fr 140px;gap:12px;align-items:center">
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--blue)">FOR UPDATE</div>
+        <div style="font-size:12px;color:var(--muted)">Need to read a row, make a decision, then update it. Lock between read and write.</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--blue);text-align:right">check-then-act</div>
+      </div>
+    </div>
+
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="compDetail('skip')">
+      <div style="display:grid;grid-template-columns:180px 1fr 140px;gap:12px;align-items:center">
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--cyan)">SKIP LOCKED</div>
+        <div style="font-size:12px;color:var(--muted)">Grab any available item from a pool. Don't wait for busy ones.</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--cyan);text-align:right">ticket/job queues</div>
+      </div>
+    </div>
+
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="compDetail('rr')">
+      <div style="display:grid;grid-template-columns:180px 1fr 140px;gap:12px;align-items:center">
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--amber)">Repeatable Read</div>
+        <div style="font-size:12px;color:var(--muted)">Multiple queries need to see a consistent snapshot. Report generation.</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--amber);text-align:right">consistent reads</div>
+      </div>
+    </div>
+
+    <div style="background:var(--s1);border:1px solid var(--border);border-radius:8px;padding:14px 16px;cursor:pointer;transition:border-color .15s" onmouseover="this.style.borderColor='var(--border2)'" onmouseout="this.style.borderColor='var(--border)'" onclick="compDetail('ser')">
+      <div style="display:grid;grid-template-columns:180px 1fr 140px;gap:12px;align-items:center">
+        <div style="font-family:var(--mono);font-size:11px;font-weight:700;color:var(--purple)">Serializable</div>
+        <div style="font-size:12px;color:var(--muted)">Complex logic where two transactions' reads and writes depend on each other in a way that creates impossible results.</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--purple);text-align:right">+ retry logic</div>
+      </div>
+    </div>
+
+  </div>
+
+  <div class="detail empty" id="detail-comp">
+    <h3>← Click a tool to see when to use it with a concrete example</h3>
+  </div>
+
+  <div class="sec">the decision flow</div>
+  <div style="background:var(--s2);border:1px solid var(--border);border-radius:8px;padding:16px;font-family:var(--mono);font-size:11px;line-height:2.4;color:#64748b">
+    <span style="color:var(--cyan)">Q: Can I express the operation as a single atomic UPDATE?</span><br>
+    &nbsp;&nbsp;YES → <span style="color:var(--green)">Use atomic UPDATE. No isolation level needed.</span><br>
+    &nbsp;&nbsp;NO ↓<br>
+    <span style="color:var(--cyan)">Q: Do I need to read a row, decide, then update that same row?</span><br>
+    &nbsp;&nbsp;YES → <span style="color:var(--blue)">Use FOR UPDATE (or SKIP LOCKED for pools).</span><br>
+    &nbsp;&nbsp;NO ↓<br>
+    <span style="color:var(--cyan)">Q: Do I need multiple queries to see a consistent snapshot?</span><br>
+    &nbsp;&nbsp;YES → <span style="color:var(--amber)">Use REPEATABLE READ.</span><br>
+    &nbsp;&nbsp;NO ↓<br>
+    <span style="color:var(--cyan)">Q: Could two transactions' decisions interact in a logically impossible way?</span><br>
+    &nbsp;&nbsp;YES → <span style="color:var(--purple)">Use SERIALIZABLE + retry logic.</span><br>
+    &nbsp;&nbsp;NO → <span style="color:var(--muted)">READ COMMITTED is fine.</span>
+  </div>
+</div>
+
+</div>
+<script>
+const TM={race:0,variants:1,tickets:2,serial:3,compare:4};
+function st(n){
+  document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('view-'+n).classList.add('active');
+  document.querySelectorAll('.tab')[TM[n]].classList.add('active');
+}
+function sd(id,color,title,body){
+  const el=document.getElementById(id);
+  if(!el)return;
+  el.style.borderLeftColor=color;
+  el.classList.remove('empty');
+  el.innerHTML=`<h3>${title}</h3>${body}`;
+  el.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+// ─── RACE SIM ───
+let mode='unsafe', currentStep=0;
+const scenarios={
+  unsafe:{
+    steps:[
+      {lane:'a',text:'BEGIN;',color:'rgba(59,130,246,.12)',bc:'rgba(59,130,246,.3)',detail:{c:'var(--blue)',t:'Transaction A starts',b:'<p>A begins a transaction. At Read Committed (default), no snapshot is taken yet — each statement will get a fresh one.</p>'}},
+      {lane:'b',text:'BEGIN;',color:'rgba(245,158,11,.1)',bc:'rgba(245,158,11,.25)',detail:{c:'var(--amber)',t:'Transaction B starts simultaneously',b:'<p>Both A and B are running at the same time. Neither knows about the other yet.</p>'}},
+      {lane:'a',text:'SELECT * FROM seats WHERE available=true LIMIT 1;\n→ seat_id = 7, available=true',color:'rgba(59,130,246,.12)',bc:'rgba(59,130,246,.3)',seat:{id:6,state:'a-check'},detail:{c:'var(--blue)',t:'A reads seat 7 — available=true',b:'<p>A reads seat 7 and sees it\'s available. No lock taken. Nothing is preventing B from also reading this seat right now.</p>'}},
+      {lane:'b',text:'SELECT * FROM seats WHERE available=true LIMIT 1;\n→ seat_id = 7, available=true',color:'rgba(245,158,11,.1)',bc:'rgba(245,158,11,.25)',seat:{id:6,state:'both-check'},detail:{c:'var(--amber)',t:'B also reads seat 7 — also sees available=true',b:'<p>B reads the same seat! It\'s still available because A hasn\'t committed yet and took no lock. Both transactions now think seat 7 is theirs to book.</p><span class="tag t-bad">Race condition in progress</span>'}},
+      {lane:'a',text:'UPDATE seats SET available=false WHERE id=7;\nCOMMIT; ✓',color:'rgba(59,130,246,.12)',bc:'rgba(59,130,246,.3)',seat:{id:6,state:'a-booked'},detail:{c:'var(--green)',t:'A books seat 7 and commits',b:'<p>A successfully writes available=false and commits. From A\'s perspective everything is fine — it booked the seat.</p>'}},
+      {lane:'b',text:'UPDATE seats SET available=false WHERE id=7;\nCOMMIT; ✓  ← DOUBLE BOOKING!',color:'rgba(239,68,68,.15)',bc:'rgba(239,68,68,.4)',seat:{id:6,state:'double'},detail:{c:'var(--red)',t:'B also books seat 7 — DOUBLE BOOKING!',b:'<p>B also writes available=false and commits. PostgreSQL doesn\'t throw an error — B just overwrote A\'s write with the same value. No error, no warning. Two people think they have the same seat.</p><span class="tag t-bad">Data corruption with no error thrown</span>'}},
+    ]
+  },
+  safe:{
+    steps:[
+      {lane:'a',text:'BEGIN;',color:'rgba(59,130,246,.12)',bc:'rgba(59,130,246,.3)',detail:{c:'var(--blue)',t:'Transaction A starts',b:'<p>A begins. Nothing locked yet.</p>'}},
+      {lane:'b',text:'BEGIN;',color:'rgba(245,158,11,.1)',bc:'rgba(245,158,11,.25)',detail:{c:'var(--amber)',t:'Transaction B starts simultaneously',b:'<p>Both running at the same time.</p>'}},
+      {lane:'a',text:'SELECT * FROM seats WHERE available=true LIMIT 1\nFOR UPDATE;\n→ seat_id=7, lock acquired ✓',color:'rgba(59,130,246,.12)',bc:'rgba(59,130,246,.3)',seat:{id:6,state:'locked-a'},detail:{c:'var(--blue)',t:'A reads seat 7 WITH FOR UPDATE — lock acquired',b:'<p>A reads seat 7 AND immediately acquires a row-level lock on it. The lock says: "I\'m about to modify this row. Nobody else can modify it until I commit."</p><p>Plain SELECTs from other transactions can still read the row (MVCC gives them the old version). But any FOR UPDATE or UPDATE will block.</p><span class="tag t-ok">Lock acquired</span>'}},
+      {lane:'b',text:'SELECT * FROM seats WHERE available=true LIMIT 1\nFOR UPDATE;\n⏸ BLOCKED — waiting for A\'s lock',color:'rgba(245,158,11,.15)',bc:'rgba(245,158,11,.4)',seat:{id:6,state:'locked-a'},detail:{c:'var(--amber)',t:'B tries FOR UPDATE on seat 7 — BLOCKS',b:'<p>B tries to lock the same seat. Since A already holds a FOR UPDATE lock, B cannot acquire it. B is now blocked — it sits and waits. It does not error, does not skip, does not time out immediately. It waits.</p><span class="tag t-warn">B is blocked, waiting for A to finish</span>'}},
+      {lane:'a',text:'UPDATE seats SET available=false WHERE id=7;\nCOMMIT; — lock released',color:'rgba(59,130,246,.12)',bc:'rgba(59,130,246,.3)',seat:{id:6,state:'booked'},detail:{c:'var(--green)',t:'A commits — lock released',b:'<p>A updates the seat and commits. The FOR UPDATE lock is automatically released at COMMIT. B is now unblocked and can proceed.</p>'}},
+      {lane:'b',text:'Unblocked! Reads seat 7 → available=false\n→ 0 rows returned → no seat to book',color:'rgba(16,185,129,.1)',bc:'rgba(16,185,129,.3)',seat:{id:6,state:'booked'},detail:{c:'var(--green)',t:'B unblocks — seat is already booked',b:'<p>B was waiting. Now that A committed, B re-reads seat 7 and sees available=false. The FOR UPDATE returned 0 rows (or B checks and finds the seat taken). B gracefully handles this — no double booking.</p><span class="tag t-ok">No double booking. Safe.</span>'}},
+    ]
+  },
+  skip:{
+    steps:[
+      {lane:'a',text:'BEGIN;',color:'rgba(59,130,246,.12)',bc:'rgba(59,130,246,.3)',detail:{c:'var(--blue)',t:'Transaction A starts',b:'<p>A begins.</p>'}},
+      {lane:'b',text:'BEGIN;',color:'rgba(245,158,11,.1)',bc:'rgba(245,158,11,.25)',detail:{c:'var(--amber)',t:'Transaction B starts simultaneously',b:'<p>Both running at the same time. With SKIP LOCKED they won\'t interfere with each other at all.</p>'}},
+      {lane:'a',text:'SELECT * FROM seats WHERE available=true LIMIT 1\nFOR UPDATE SKIP LOCKED;\n→ locks seat 7',color:'rgba(59,130,246,.12)',bc:'rgba(59,130,246,.3)',seat:{id:6,state:'locked-a'},detail:{c:'var(--blue)',t:'A locks seat 7 with SKIP LOCKED',b:'<p>A finds seat 7 available and locks it. SKIP LOCKED means: "if a seat is already locked by someone else, don\'t wait — skip it and give me the next available one."</p>'}},
+      {lane:'b',text:'SELECT * FROM seats WHERE available=true LIMIT 1\nFOR UPDATE SKIP LOCKED;\n→ skips seat 7 (locked), locks seat 8',color:'rgba(245,158,11,.1)',bc:'rgba(245,158,11,.25)',seat:{id:6,state:'both-locked'},detail:{c:'var(--cyan)',t:'B skips seat 7, grabs seat 8 — no blocking!',b:'<p>B sees seat 7 is locked by A. With SKIP LOCKED, B doesn\'t wait — it skips seat 7 entirely and locks seat 8 instead. No waiting, no blocking. Both transactions proceed simultaneously.</p><span class="tag t-ok">No blocking. Both proceed in parallel.</span>'}},
+      {lane:'a',text:'UPDATE seats SET available=false WHERE id=7;\nCOMMIT; ✓ seat 7 booked',color:'rgba(59,130,246,.12)',bc:'rgba(59,130,246,.3)',seat:{id:6,state:'a-final'},detail:{c:'var(--green)',t:'A books seat 7',b:'<p>A commits. Seat 7 is booked for Alice.</p>'}},
+      {lane:'b',text:'UPDATE seats SET available=false WHERE id=8;\nCOMMIT; ✓ seat 8 booked',color:'rgba(245,158,11,.1)',bc:'rgba(245,158,11,.25)',seat:{id:7,state:'b-final'},detail:{c:'var(--green)',t:'B books seat 8',b:'<p>B commits. Seat 8 is booked for Bob. Two different seats, no conflict, no double booking, no waiting.</p><span class="tag t-ok">Two users booked simultaneously, different seats, zero conflicts.</span>'}},
+    ]
+  }
+};
+
+function initSeats(){
+  const el=document.getElementById('seat-display');
+  el.innerHTML='';
+  for(let i=0;i<20;i++){
+    const s=document.createElement('div');
+    s.className='seat available';
+    s.id='seat-'+i;
+    s.textContent=(i+1);
+    el.appendChild(s);
+  }
+}
+function updateSeats(seat){
+  if(!seat)return;
+  const el=document.getElementById('seat-'+seat.id);
+  if(!el)return;
+  const map={
+    'a-check':'locked-a','both-check':'double',
+    'locked-a':'locked-a','both-locked':null,
+    'booked':'booked','double':'double',
+    'a-booked':'booked','a-final':'booked','b-final':'booked'
+  };
+  if(seat.state==='both-locked'){
+    document.getElementById('seat-6').className='seat locked-a';
+    document.getElementById('seat-7').className='seat locked-b';
+    return;
+  }
+  if(seat.state==='a-final'){
+    document.getElementById('seat-6').className='seat booked';
+    return;
+  }
+  if(seat.state==='b-final'){
+    document.getElementById('seat-7').className='seat booked';
+    return;
+  }
+  if(map[seat.state]) el.className='seat '+map[seat.state];
+}
+
+function renderSteps(){
+  const sc=scenarios[mode];
+  ['a','b'].forEach(lane=>{
+    const el=document.getElementById('steps-'+lane);
+    el.innerHTML='';
+    sc.steps.forEach((s,i)=>{
+      if(s.lane!==lane)return;
+      const div=document.createElement('div');
+      div.className='step'+(i<currentStep?' done':(i===currentStep?' active':''));
+      div.style.background=s.color;
+      div.style.borderColor=i<=currentStep?s.bc:'transparent';
+      div.textContent=s.text;
+      div.style.color=i<=currentStep?'var(--text)':'var(--muted)';
+      div.onclick=()=>jumpTo(i);
+      el.appendChild(div);
+    });
+  });
+  const sc2=sc.steps[currentStep];
+  if(sc2){
+    sd('detail-race',sc2.detail.c,sc2.detail.t,sc2.detail.b);
+    updateSeats(sc2.seat);
+  }
+  document.getElementById('step-label').textContent=`Step ${currentStep+1} / ${sc.steps.length}`;
+}
+function jumpTo(i){currentStep=i;renderSteps();}
+function nextStep(){if(currentStep<scenarios[mode].steps.length-1){currentStep++;renderSteps();}}
+function prevStep(){if(currentStep>0){currentStep--;renderSteps();}}
+function resetSim(){currentStep=0;initSeats();renderSteps();}
+function setMode(m){
+  mode=m;currentStep=0;
+  document.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('mode-'+m).classList.add('active');
+  initSeats();renderSteps();
+}
+
+// ─── VARIANTS ───
+const varData={
+  fu:['var(--blue)','FOR UPDATE — Lock and Wait',
+    `<p>The standard lock. Read the row AND lock it. Any other transaction that tries to UPDATE, DELETE, or SELECT FOR UPDATE the same row will <strong>block</strong> until you commit or rollback.</p>
+    <p>Plain SELECTs (without FOR UPDATE) are never blocked — they read via MVCC and see the last committed version.</p>
+    <div class="fix">BEGIN;
+SELECT balance FROM accounts WHERE id=1 FOR UPDATE;
+-- Row is now locked. Others block on this row.
+-- Safe to read, compute, write:
+UPDATE accounts SET balance = balance - 500 WHERE id=1;
+COMMIT; -- lock released</div>
+    <p><strong>Use when:</strong> You need to read a row, make a decision based on it, and then update it. The lock prevents anyone else from changing the row between your read and write.</p>`],
+  skip:['var(--green)','FOR UPDATE SKIP LOCKED — Skip Busy Rows',
+    `<p>Instead of blocking when it encounters a locked row, it silently skips that row and moves to the next one. The result only contains rows that were successfully locked.</p>
+    <p>If no unlocked rows exist, returns 0 rows.</p>
+    <div class="fix">-- Ticket booking: grab any available seat
+SELECT id FROM seats
+WHERE event_id=42 AND available=true
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+-- Returns one seat that is guaranteed unlocked
+-- (no race condition, no waiting)</div>
+    <p><strong>Use when:</strong> You have a pool of items (tickets, jobs, tasks) and each worker should grab a different one. Workers should never block each other.</p>
+    <p>Also perfect for <strong>job queues</strong>: multiple workers all run this query — each grabs a different job from the queue.</p>`],
+  nowait:['var(--amber)','FOR UPDATE NOWAIT — Fail Immediately',
+    `<p>If the row is locked, throw an error immediately instead of waiting. The error is: <code>ERROR: could not obtain lock on row in relation "table"</code></p>
+    <div class="fix">BEGIN;
+SELECT * FROM orders WHERE id=42 FOR UPDATE NOWAIT;
+-- If locked: ERROR immediately
+-- If unlocked: lock acquired, continue
+
+-- Handle in application:
+try:
+    conn.execute("SELECT ... FOR UPDATE NOWAIT")
+except LockError:
+    return "This record is being edited. Try again."</div>
+    <p><strong>Use when:</strong> Waiting is worse than failing. Admin interfaces where you want to tell the user "someone else is editing this" rather than making them wait indefinitely. High-frequency trading where a stale lock means the opportunity is gone.</p>`],
+  share:['var(--purple)','FOR SHARE — Shared Read Lock',
+    `<p>Weaker than FOR UPDATE. Multiple transactions can hold FOR SHARE on the same row simultaneously. Prevents the row from being modified but allows other readers to also take FOR SHARE.</p>
+    <div class="fix">-- Checking parent exists before inserting child:
+BEGIN;
+SELECT id FROM users WHERE id=42 FOR SHARE;
+-- Now the user row cannot be deleted until I commit.
+-- Other readers can still read it (even FOR SHARE).
+-- Only FOR UPDATE/DELETE will block.
+
+INSERT INTO orders (user_id, amount) VALUES (42, 99);
+COMMIT;</div>
+    <p><strong>Use when:</strong> You're validating that a reference exists (foreign key check) and don't want it deleted between your check and your insert. You don't need exclusive access — just protection from deletion.</p>`],
+};
+function varDetail(key){
+  const[c,t,b]=varData[key];
+  sd('detail-variant',c,t,b);
+  document.querySelectorAll('.variant-card').forEach(e=>e.classList.remove('lit'));
+  event.currentTarget.classList.add('lit');
+}
+const lockDetails={
+  fu_fu:['var(--red)','FOR UPDATE blocks FOR UPDATE',`<p>Two transactions cannot both hold FOR UPDATE on the same row. The second one blocks until the first commits or rolls back.</p><p>This is the core safety mechanism: only one writer at a time can hold a write lock on a row.</p>`],
+  sh_fu:['var(--red)','FOR UPDATE blocks FOR SHARE',`<p>If someone holds FOR SHARE and you try FOR UPDATE — you block. Makes sense: FOR SHARE says "I'm reading this and don't want it modified." FOR UPDATE wants to modify. They're incompatible.</p>`],
+  sel_fu:['var(--green)','Plain SELECT never blocks',`<p>A plain SELECT (without FOR UPDATE or FOR SHARE) uses MVCC and reads the last committed version of the row. It never acquires any lock and is never blocked by any lock.</p><p>This is the core MVCC benefit: readers and writers never block each other for plain reads.</p>`],
+};
+function lockDetail(key){
+  const[c,t,b]=lockDetails[key];
+  sd('detail-lock',c,t,b);
+}
+
+// ─── TICKETS ───
+function ticketApproach(key){
+  const details={
+    wrong:['var(--red)','❌ Wrong — Race Condition, Double Booking Possible',
+      `<p>Plain SELECT takes no lock. Between your SELECT (seeing available=true) and your UPDATE (setting available=false), another transaction can also SELECT the same seat, also see available=true, and also UPDATE it.</p>
+      <p>Both transactions commit successfully with no error. Two people booked the same seat. You won't know until they show up at the venue.</p>`,
+      `500 users hit simultaneously:<br><br>
+      <span style="color:var(--red)">Txn 1-100: All SELECT seat 7 → all see available=true</span><br>
+      <span style="color:var(--red)">Txn 1-100: All UPDATE seat 7 → all succeed!</span><br>
+      <span style="color:var(--red)">Result: seat 7 booked 100 times. 99 people are angry.</span>`
+    ],
+    wait:['var(--amber)','⚠️ Correct but Slow — Creates a Queue',
+      `<p>FOR UPDATE prevents double booking: the second transaction blocks until the first commits, then sees available=false and returns no rows.</p>
+      <p>The problem: LIMIT 1 without SKIP LOCKED means <strong>all 500 transactions compete for seat 7</strong>. They queue up one at a time. Each has to wait for the previous one. High latency, low throughput.</p>`,
+      `500 users hit simultaneously:<br><br>
+      <span style="color:var(--blue)">Txn 1: locks seat 7, books it (fast)</span><br>
+      <span style="color:var(--amber)">Txn 2-500: all blocked on seat 7, waiting in queue</span><br>
+      <span style="color:var(--amber)">Txn 2: unblocks, sees available=false, tries next seat...</span><br>
+      <span style="color:var(--amber)">Each txn waits for all previous ones. Slow at scale.</span>`
+    ],
+    skip:['var(--green)','✓ Correct AND Fast — Workers Spread Across Seats',
+      `<p>SKIP LOCKED means each transaction immediately skips any seat already being locked by another transaction and grabs a different available one. No waiting, no queuing.</p>
+      <p>All 500 transactions run in true parallel. The first 100 each grab a different seat simultaneously. The remaining 400 find no unlocked available seats and immediately return sold out.</p>`,
+      `500 users hit simultaneously:<br><br>
+      <span style="color:var(--green)">Txn 1: locks seat 1 → books it</span><br>
+      <span style="color:var(--green)">Txn 2: skips seat 1, locks seat 2 → books it</span><br>
+      <span style="color:var(--green)">Txn 3: skips seats 1-2, locks seat 3 → books it</span><br>
+      <span style="color:var(--cyan)">... first 100 txns: each gets a different seat immediately</span><br>
+      <span style="color:var(--muted)">Txn 101-500: find 0 unlocked available seats → "sold out"</span><br>
+      <span style="color:var(--green)">All 500 finish in parallel. No waiting. No double booking.</span>`
+    ],
+  };
+  const[c,t,b,concurrent]=details[key];
+  sd('detail-ticket',c,t,b);
+  document.getElementById('concurrent-demo').innerHTML=concurrent;
+}
+const codeDetails={
+  begin:['var(--cyan)','BEGIN — Start Transaction',`<p>All operations between BEGIN and COMMIT are atomic. Either all succeed or all fail. If the server crashes mid-transaction, PostgreSQL rolls back automatically on restart.</p>`],
+  select_skip:['var(--green)','SELECT ... FOR UPDATE SKIP LOCKED — The Key Line',`<p>This one statement does three things simultaneously:<br>1. Finds a seat that is available=true<br>2. Locks it (FOR UPDATE) — no one else can book this exact seat now<br>3. Skips any seats already locked by other concurrent transactions (SKIP LOCKED)</p><p>The result is guaranteed: if you get a row back, that seat is yours. No other transaction can book it while you hold the lock.</p>`],
+  null_check:['var(--amber)','NULL Check — Handle Sold Out',`<p>If 0 rows are returned, either all seats are sold (available=false) or all remaining seats are currently being booked by concurrent transactions (locked). Either way, handle it gracefully rather than trying to update a NULL seat_id.</p><p>In a retry scenario, you might wait 50ms and try again — some of those locked seats might roll back (if a user abandons their checkout).</p>`],
+  update:['var(--cyan)','UPDATE — Safe to Write Now',`<p>The lock is held. No other transaction can touch this row until you commit. This UPDATE is safe from race conditions — you're the only writer on this row right now.</p><p>Also insert into bookings table here to create the actual booking record.</p>`],
+  commit:['var(--green)','COMMIT — Lock Released',`<p>Both the lock and the transaction complete atomically. After COMMIT, the seat is visible as available=false to all new transactions. Any transactions that were waiting on this row are now unblocked.</p>`],
+};
+function codeDetail(key){
+  const[c,t,b]=codeDetails[key];
+  sd('detail-code',c,t,b);
+}
+
+// ─── SERIALIZABLE DEP GRAPH ───
+let depState={a:false,b:false,c:false};
+function depTxn(key){
+  depState[key]=!depState[key];
+  document.getElementById('dtxn-'+key).classList.toggle('lit',depState[key]);
+  renderDepGraph();
+  const details={
+    a:['var(--blue)','Transaction A — Reads doctors, Writes Alice',
+      `<p>A reads the entire doctors table (to count on-call doctors) and writes to Alice's row (setting her off-call). A <strong>depends on</strong> the state of the doctors table when it ran its SELECT.</p>
+      <p>If Transaction B's write happened before A's read in a sequential ordering, A would have seen count=1 (only Alice on call) and would NOT have gone off call. But A saw count=2 — meaning B hadn't written yet when A read.</p>`],
+    b:['var(--amber)','Transaction B — Reads doctors, Writes Bob',
+      `<p>B also reads the doctors table and writes to Bob's row. Same logic: B saw count=2 (both doctors on call) and decided it was safe to go off call.</p>
+      <p>B's read <strong>depends on</strong> A not having committed yet. A's write <strong>depends on</strong> B not having committed yet. This mutual dependency forms a cycle.</p>`],
+    c:['var(--green)','Transaction C — No Conflict',
+      `<p>C reads and writes the orders table — completely different data from A and B. No dependencies between C and the other transactions. C commits successfully regardless.</p>
+      <p>This shows that Serializable only aborts transactions that are actually in a conflict cycle. Unrelated transactions run freely without any performance impact.</p>`],
+  };
+  const[c,t,b]=details[key];
+  sd('detail-dep',c,t,b);
+}
+function renderDepGraph(){
+  const svg=document.getElementById('dep-svg');
+  svg.innerHTML='';
+  // A→B: A read data that B's type of write affects
+  // B→A: B read data that A's type of write affects
+  const nodes={a:{x:90,y:35},b:{x:35,y:145},c:{x:145,y:145}};
+  const arrows=[];
+  if(depState.a&&depState.b){
+    arrows.push({from:'a',to:'b',color:'var(--red)'});
+    arrows.push({from:'b',to:'a',color:'var(--red)'});
+  }
+  if(depState.c){
+    // C has no conflict arrows
+  }
+  arrows.forEach(({from,to,color})=>{
+    const f=nodes[from],t=nodes[to];
+    const dx=t.x-f.x,dy=t.y-f.y;
+    const len=Math.sqrt(dx*dx+dy*dy);
+    const ux=dx/len,uy=dy/len;
+    const r=26;
+    const x1=f.x+ux*r,y1=f.y+uy*r;
+    const x2=t.x-ux*r,y2=t.y-uy*r;
+    const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+    line.setAttribute('x1',x1);line.setAttribute('y1',y1);
+    line.setAttribute('x2',x2);line.setAttribute('y2',y2);
+    line.setAttribute('stroke',color);line.setAttribute('stroke-width','2');
+    line.setAttribute('marker-end','url(#arr)');
+    svg.appendChild(line);
+  });
+  if(!svg.querySelector('defs')){
+    const defs=document.createElementNS('http://www.w3.org/2000/svg','defs');
+    const marker=document.createElementNS('http://www.w3.org/2000/svg','marker');
+    marker.setAttribute('id','arr');marker.setAttribute('markerWidth','8');
+    marker.setAttribute('markerHeight','8');marker.setAttribute('refX','6');
+    marker.setAttribute('refY','3');marker.setAttribute('orient','auto');
+    const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+    path.setAttribute('d','M0,0 L0,6 L8,3 z');
+    path.setAttribute('fill','var(--red)');
+    marker.appendChild(path);defs.appendChild(marker);svg.appendChild(defs);
+  }
+  const hasCycle=depState.a&&depState.b;
+  const warn=document.getElementById('cycle-warn');
+  warn.style.opacity=hasCycle?'1':'0';
+  document.getElementById('gn-a').style.borderColor=depState.a?(hasCycle?'var(--red)':'rgba(59,130,246,.8)'):'rgba(59,130,246,.3)';
+  document.getElementById('gn-b').style.borderColor=depState.b?(hasCycle?'var(--red)':'rgba(245,158,11,.8)'):'rgba(245,158,11,.3)';
+}
+
+// ─── SER TIMELINE ───
+const serEvents={
+  a1:['var(--blue)','Transaction A begins — Serializable snapshot taken',`<p>At Serializable, the snapshot is taken at BEGIN (like Repeatable Read). But additionally, PostgreSQL starts tracking what rows this transaction reads and writes.</p><p>Every row A reads gets a "read set" entry. Every row A writes gets a "write set" entry. These sets are used to detect dependency cycles at commit time.</p>`],
+  a2:['var(--blue)','A reads the doctors table — read set recorded',`<p>A counts on-call doctors: SELECT COUNT(*) WHERE on_call=true → 2. This read is recorded in A's read set: "A read the doctors table's on-call rows."</p><p>A's logic: "2 doctors are on call. It's safe for me to go off-call." This decision is valid — but it depends on B not changing the on-call count first.</p>`],
+  a3:['var(--blue)','A updates Alice — write set recorded',`<p>A writes to Alice's row. This is recorded in A's write set: "A wrote Alice's row." PostgreSQL is now tracking: A's write affects data that B might have read.</p>`],
+  a4:['var(--green)','A commits — no cycle detected yet, succeeds',`<p>A is the first to commit. PostgreSQL checks A's dependencies: A read doctors (written by nobody yet), A wrote Alice (nobody else committed a write yet). No cycle. A commits successfully.</p>`],
+  b1:['var(--amber)','Transaction B begins — also Serializable',`<p>B starts at the same time as A, with the same frozen snapshot (both doctors on call). B's read and write sets start empty.</p>`],
+  b2:['var(--amber)','B reads the doctors table — same data as A',`<p>B also counts on-call doctors and also sees 2 (same snapshot as A, A hasn't committed yet). B's read set: "B read the doctors table's on-call rows."</p><p>B's logic: "2 doctors on call, safe to go off-call." Same decision as A — this is the problem.</p>`],
+  b3:['var(--amber)','B updates Bob — write set recorded',`<p>B writes to Bob's row. B's write set: "B wrote Bob's row." Now we have: A read doctors (which B affects via Bob's on_call status), B read doctors (which A affects via Alice's on_call status).</p>`],
+  b4:['var(--red)','B tries to commit — CYCLE DETECTED, ABORTED',`<p>PostgreSQL checks B's dependencies at commit time:<br>• B read doctors table<br>• A wrote to Alice (affects doctors table)<br>• A's commit was based on reading doctors table<br>• B's write affects what A read</p><p>This forms a cycle: A read → B wrote → B read → A wrote → A read (cycle!). The combined result is impossible to achieve by running A and B in any sequential order. B is aborted with ERROR: could not serialize access.</p><p>B should retry. On retry, B reads count=1 (only Bob on call), sees it can't go off-call, and correctly refuses.</p>`],
+  why1:['var(--cyan)','Dependency Tracking',`<p>PostgreSQL tracks two types of dependencies:<br><strong>rw-conflict:</strong> "I read data that you wrote after my snapshot was taken"<br><strong>ww-conflict:</strong> "We both wrote the same row"</p><p>For serialization anomalies, the dangerous pattern is an rw-anti-dependency cycle: A read something B will write, AND B read something A will write.</p>`],
+  why2:['var(--red)','The Cycle',`<p>A → B means "A depends on B not having run yet" (A read data that B is about to change)<br>B → A means "B depends on A not having run yet" (B read data that A is about to change)</p><p>A cycle means there's no sequential ordering that produces this result. If A runs first, B would see A's changes and decide differently. If B runs first, A would see B's changes and decide differently. But they both ran as if the other hadn't committed yet.</p>`],
+  why3:['var(--cyan)','What Would Happen Sequentially',`<p>If A ran first, then B: A sets Alice off-call (1 doctor on call). B starts, counts 1 doctor, decides "only 1, I can't go off-call." Rule preserved.</p><p>If B ran first, then A: B sets Bob off-call (1 doctor). A counts 1, decides "only 1, I can't go off-call." Rule preserved.</p><p>Any sequential ordering preserves the rule. The concurrent execution violated it. That's why Serializable must abort one of them.</p>`],
+  why4:['var(--green)','After Retry — Correct Result',`<p>B retries the transaction. Now A has committed — Bob is still on-call, but Alice is off-call. B counts: 1 doctor on-call (Bob). B's logic: "only 1 on call, I must stay on call." B does NOT go off-call. Rule preserved.</p><p>This is the point of Serializable: the retry produces the correct result that the concurrent execution couldn't.</p>`],
+};
+function serEvent(key){
+  const[c,t,b]=serEvents[key];
+  sd('detail-ser',c,t,b);
+  document.querySelectorAll('.ser-event').forEach(e=>e.classList.remove('lit'));
+  event.currentTarget.classList.add('lit');
+}
+
+// ─── COMPARISON ───
+const compData={
+  atomic:['var(--green)','Atomic UPDATE — The Simplest Solution',
+    `<p>When you can express the change as math on the existing value, no lock is needed. The database executes the read and write as a single atomic operation — no other transaction can sneak in between.</p>
+    <div class="fix">-- No race condition possible:
+UPDATE accounts SET balance = balance - 100 WHERE id = 1;
+UPDATE inventory SET stock = stock - 1 WHERE id = 42;
+UPDATE counters SET views = views + 1 WHERE page_id = 7;
+
+-- The database reads and writes in one operation.
+-- No transaction can see the intermediate state.</div>
+    <p><strong>Limitation:</strong> Only works when you don't need to make a conditional decision first (like "only deduct if balance ≥ amount"). For that, use FOR UPDATE.</p>`],
+  fu:['var(--blue)','FOR UPDATE — Check-Then-Act Safety',
+    `<p>When you need to read a value, make a decision based on it, and then update — you need the value to not change between read and decision. FOR UPDATE locks the row at read time.</p>
+    <div class="fix">BEGIN;
+-- Read and lock in one step:
+SELECT balance FROM accounts WHERE id=1 FOR UPDATE;
+-- Returns: 1000. Row is now locked.
+
+-- Make decision safely:
+IF balance >= 500 THEN
+    UPDATE accounts SET balance = balance - 500 WHERE id=1;
+    COMMIT;
+ELSE
+    ROLLBACK; -- insufficient funds
+END IF;</div>
+    <p><strong>The guarantee:</strong> Nobody can change the balance between your read and your update. The value you read is the value you write against.</p>`],
+  skip:['var(--cyan)','SKIP LOCKED — Pool/Queue Processing',
+    `<p>When multiple workers need to each grab a different item from a shared pool — tickets, jobs, tasks — SKIP LOCKED lets them all work simultaneously without blocking each other.</p>
+    <div class="fix">-- Job queue: each worker runs this in a loop:
+BEGIN;
+SELECT id, payload FROM jobs
+WHERE status = 'pending'
+ORDER BY created_at
+LIMIT 1
+FOR UPDATE SKIP LOCKED;
+
+-- If got a job:
+UPDATE jobs SET status='processing', started_at=NOW()
+WHERE id = job_id;
+COMMIT;
+
+-- If got nothing: all jobs taken or processed, sleep and retry</div>
+    <p><strong>Why it scales:</strong> 10 workers run this simultaneously. Each grabs a different job instantly. No worker waits for another.</p>`],
+  rr:['var(--amber)','Repeatable Read — Consistent Multi-Query Read',
+    `<p>When you run multiple queries that must see a consistent view of the data — a report, an export, a balance calculation across multiple tables.</p>
+    <div class="fix">BEGIN ISOLATION LEVEL REPEATABLE READ;
+
+-- All three see the exact same snapshot.
+-- Even if orders are inserted between these queries,
+-- the numbers will be mathematically consistent.
+SELECT SUM(amount) FROM orders WHERE created_at::date = today;
+SELECT COUNT(*) FROM orders WHERE created_at::date = today;
+SELECT AVG(amount) FROM orders WHERE created_at::date = today;
+
+COMMIT;</div>
+    <p><strong>No locking involved.</strong> Other transactions can read and write freely. Your snapshot is just frozen — you see a consistent past state, they see the present.</p>`],
+  ser:['var(--purple)','Serializable — Complex Logic Correctness',
+    `<p>When your transaction logic has constraints that depend on what other concurrent transactions are doing, and you need guaranteed correctness. Requires retry logic in your application.</p>
+    <div class="fix">-- Must retry on serialization failure:
+MAX_RETRIES = 3
+for attempt in range(MAX_RETRIES):
+    try:
+        with conn:
+            conn.set_isolation_level(SERIALIZABLE)
+            
+            # Complex logic that depends on other data:
+            count = conn.execute("SELECT COUNT(*) FROM doctors WHERE on_call=true").scalar()
+            if count > 1:
+                conn.execute("UPDATE doctors SET on_call=false WHERE name=%s", [me])
+            conn.commit()
+            break  # success
+    except SerializationFailure:
+        conn.rollback()
+        sleep(0.01 * attempt)  # backoff
+else:
+    raise Exception("Failed after retries")</div>
+    <p><strong>Performance cost:</strong> Extra overhead for dependency tracking. Some transactions get aborted and must retry. Use only when the correctness guarantee is worth it.</p>`],
+};
+function compDetail(key){
+  const[c,t,b]=compData[key];
+  sd('detail-comp',c,t,b);
+}
+
+// init
+initSeats();
+renderSteps();
+renderDepGraph();
+</script>
+</body>
+</html>
